@@ -1,6 +1,14 @@
 # ZeroSock
 
-High-performance SOCKS5 L4 router in Go.
+**ZeroSock is not a tool for bypassing internet restrictions.** It is a high-performance L4 SOCKS5 router and load balancer built for server infrastructure, microservices, and large-scale data collection (e.g. scraping pipelines). It works like a scalpel: no bloat, strict destination control (whitelist-only routing), and maximum speed via zero-copy (`splice` on Linux).
+
+## Key Use Cases
+
+### Resilient Egress Gateway and client-side load balancing
+
+**Problem:** The app talks to external APIs or internal upstreams via DNS round-robin. When an upstream fails, DNS keeps returning its IP (TTL caching). The app hits timeouts and errors.
+
+**Solution with ZeroSock:** Run ZeroSock locally next to the app (sidecar container or daemon). Point all outbound traffic to the local SOCKS5 port. ZeroSock performs active TCP health checks and removes dead upstreams from rotation immediately, bypassing DNS. The app sees a stable, healthy pool of backends without being aware of upstream failures.
 
 ## Features
 
@@ -15,6 +23,12 @@ High-performance SOCKS5 L4 router in Go.
 - Strict zero-copy-compatible relay (`io.Copy` between raw `*net.TCPConn`, no `bufio.Reader` in data plane)
 - Built-in Prometheus metrics exporter (`/metrics`)
 - Graceful shutdown (`SIGINT`, `SIGTERM`) with configurable grace period
+
+## Why SOCKS5, not a transparent TCP balancer?
+
+- **Explicit routing:** The application must be explicitly configured to use SOCKS5. There is no accidental direct traffic if the OS or firewall is misconfigured — no proxy, no connection.
+- **Strict whitelisting:** Routing follows “deny all, allow listed”. If a compromised app tries to reach an unknown host, the connection is rejected at the SOCKS5 handshake (no extra network load).
+- **Low overhead:** On Linux, zero-copy via `splice()` moves data between sockets in kernel space. That yields multi-gigabit throughput with minimal CPU and memory (~30 MB RAM for thousands of connections).
 
 ## Requirements
 
@@ -111,3 +125,10 @@ ZeroSock has been rigorously stress-tested to validate its throughput, memory st
 ZeroSock acts as a highly optimized "scalpel" for SOCKS5 proxying. By stripping away heavy L7 features, it delivers raw, kernel-level networking performance and an exceptionally small resource footprint.
 
 For full test methodology, metrics, and environment details, see [STRESS_TEST_RESULTS.md](STRESS_TEST_RESULTS.md).
+
+## Roadmap
+
+- [x] Prometheus metrics
+- [x] Active upstream health checks
+- [x] Zero-copy relay (`splice`)
+- [ ] **Hot-reload** — update upstream pools and whitelists without restart (planned)
