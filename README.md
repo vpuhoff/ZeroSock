@@ -122,6 +122,28 @@ ZeroSock acts as a highly optimized "scalpel" for SOCKS5 proxying. By stripping 
 
 For full test methodology, metrics, and environment details, see [STRESS_TEST_RESULTS.md](STRESS_TEST_RESULTS.md).
 
+## Comparison with alternatives
+
+| Characteristic / Tool | ZeroSock | Gost | Glider | HAProxy | Envoy | 3proxy | Xray-core |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **SOCKS5 (inbound)** | Yes (CONNECT only, IPv4/FQDN) | Yes (full) | Yes (full) | Limited (via TCP) | Yes (TCP proxy) | Yes (full) | Yes (full) |
+| **Round-robin balancing** | Yes | Yes | Yes | Yes (advanced) | Yes (advanced) | Yes (via parent) | Yes |
+| **Active health checks** | Yes (L4 TCP / L7 HTTP) | Yes | Yes | Yes (very flexible) | Yes (advanced) | Basic | Yes |
+| **Zero-copy (Linux `splice`)** | **Yes** (out of the box) | No (standard `io.Copy`) | No | **Yes** | No (but C++ highly optimized) | No | Depends on protocol |
+| **Strict egress (whitelisting)** | Yes (allowed hosts only) | Yes (via ACL/rules) | Yes (via rules) | Yes (ACL) | Yes (RBAC/routing) | Yes (powerful ACL) | Yes (powerful routing) |
+| **Resource usage (RAM)** | **Ultra-low** (~30 MB) | Medium | Low | Medium | High | **Ultra-low** | Medium |
+| **Configuration complexity** | Low (simple YAML) | Medium (CLI/JSON) | Medium | High | Very high | Medium (own syntax) | High (complex JSON) |
+| **Primary focus** | Minimal SOCKS5 sidecar / scraping | Universal toolkit / tunnels | Forward proxy / router | Enterprise L4/L7 balancer | Enterprise service mesh / egress | Classic lightweight proxy | Bypass / complex routing |
+| **Code size & scope** | No bloat (core only) | Many features (crypto, tunnels) | Many protocols | Large codebase | Large codebase | Legacy protocol support | Many obfuscation protocols |
+
+### Takeaways
+
+1. **Maximum throughput with minimal CPU (zero-copy):** ZeroSock has a strong position among Go tools thanks to `splice()`. **HAProxy** is the main competitor here but is much harder to configure and is not a native SOCKS5 server.
+2. **Balancing + SOCKS5 but need UDP or IPv6:** Consider **Gost** or **Glider**.
+3. **Production-grade for Kubernetes microservices:** **Envoy** or **HAProxy** are the industry standard — heavier, but battle-tested with rich metrics, logging, and community.
+
+In short: ZeroSock is a scalpel; Envoy or Xray are Swiss Army knives with many blades.
+
 ## Roadmap
 
 - [x] Prometheus metrics
