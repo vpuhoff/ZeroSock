@@ -21,7 +21,7 @@
 - Unsupported by design: IPv6 (`0x04`), `BIND`, `UDP ASSOCIATE`
 - Host-based routing by FQDN from local YAML config
 - Round-robin load balancing across backend IP pools
-- TCP healthchecks with `Alive/Dead` backend rotation
+- TCP (L4) or optional HTTP (L7) healthchecks with `Alive/Dead` backend rotation
 - Strict zero-copy-compatible relay (`io.Copy` between raw `*net.TCPConn`, no `bufio.Reader` in data plane)
 - Built-in Prometheus metrics exporter (`/metrics`)
 - Graceful shutdown (`SIGINT`, `SIGTERM`) with configurable grace period
@@ -41,7 +41,7 @@
 
 1. Copy config template:
    - `cp config.example.yaml config.yaml`
-2. Adjust `routes` to your backend IPs.
+2. Define `backends` (named groups with addresses and optional per-group healthcheck) and `routes` (host → group name).
 3. Run:
    - `go run ./cmd/zerosock -config config.yaml`
 
@@ -52,34 +52,28 @@
 
 Example structure (full template in `config.example.yaml`):
 
+- **backends** — named groups: each has `addresses` (list of `ip:port`) and optional `healthcheck` (interval_ms, timeout_ms, path). If path is set, L7 HTTP GET is used; otherwise L4 TCP. Unset fields fall back to the global `healthcheck` block.
+- **routes** — host → group name (string). Several hosts can reference the same group (shared backends, one healthcheck per group).
+
 ```yaml
-server:
-  listen_addr: "0.0.0.0:1080"
-  max_connections: 4096
-  max_inflight_dials: 2048
-
-metrics:
-  enabled: true
-  listen_addr: "127.0.0.1:9090"
-
 healthcheck:
   interval_ms: 5000
   timeout_ms: 2000
+  # path: ""   # optional global default; per-group path overrides
 
-tcp:
-  keepalive_ms: 30000
-
-timeouts:
-  dial_ms: 4000
-  read_ms: 10000
-  write_ms: 10000
-  idle_ms: 300000
-  shutdown_grace_period_ms: 10000
+backends:
+  api-pool:
+    addresses:
+      - "10.0.1.10:8080"
+      - "10.0.1.11:8080"
+    healthcheck:
+      interval_ms: 5000
+      timeout_ms: 2000
+      path: "/healthz"
 
 routes:
-  "api.internal":
-    - "10.0.1.10:8080"
-    - "10.0.1.11:8080"
+  "api.internal": "api-pool"
+  "api.example.com": "api-pool"
 ```
 
 ## Behavior

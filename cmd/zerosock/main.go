@@ -37,7 +37,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	checker := health.New(rt, cfg.HealthcheckInterval, cfg.HealthcheckTimeout, logger, metricCollector)
+	checker := health.New(rt, cfg.BackendGroups, cfg.HostToGroup, logger, metricCollector)
 	go checker.Start(ctx)
 
 	server, err := socks.New(

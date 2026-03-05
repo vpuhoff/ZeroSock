@@ -35,8 +35,9 @@ type Config struct {
 	} `yaml:"metrics"`
 
 	Healthcheck struct {
-		IntervalMS int `yaml:"interval_ms"`
-		TimeoutMS  int `yaml:"timeout_ms"`
+		IntervalMS int    `yaml:"interval_ms"`
+		TimeoutMS  int    `yaml:"timeout_ms"`
+		Path       string `yaml:"path"` // defaults for backend groups
 	} `yaml:"healthcheck"`
 
 	TCP struct {
@@ -51,24 +52,43 @@ type Config struct {
 		IdleMS              int `yaml:"idle_ms"`
 	} `yaml:"timeouts"`
 
-	Routes map[string][]string `yaml:"routes"`
+	Backends map[string]BackendGroup `yaml:"backends"`
+	Routes   map[string]string        `yaml:"routes"` // host -> group name
+}
+
+type BackendGroup struct {
+	Addresses   []string `yaml:"addresses"`
+	Healthcheck struct {
+		IntervalMS int    `yaml:"interval_ms"`
+		TimeoutMS  int    `yaml:"timeout_ms"`
+		Path       string `yaml:"path"`
+	} `yaml:"healthcheck"`
+}
+
+// BackendGroupConfig is the resolved group config passed to the health checker.
+type BackendGroupConfig struct {
+	Name      string
+	Addresses []string
+	Interval  time.Duration
+	Timeout   time.Duration
+	Path      string
 }
 
 type RuntimeConfig struct {
-	ListenAddr          string
-	MetricsEnabled      bool
-	MetricsListenAddr   string
-	MaxConnections      int
-	MaxInflightDials    int
-	HealthcheckInterval time.Duration
-	HealthcheckTimeout  time.Duration
-	DialTimeout         time.Duration
-	ReadTimeout         time.Duration
-	WriteTimeout        time.Duration
-	IdleTimeout         time.Duration
-	TCPKeepAlive        time.Duration
-	ShutdownGrace       time.Duration
-	Routes              map[string][]string
+	ListenAddr      string
+	MetricsEnabled  bool
+	MetricsListenAddr string
+	MaxConnections  int
+	MaxInflightDials int
+	DialTimeout     time.Duration
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	IdleTimeout     time.Duration
+	TCPKeepAlive    time.Duration
+	ShutdownGrace   time.Duration
+	Routes          map[string][]string            // host -> addresses (for router)
+	BackendGroups   []BackendGroupConfig           // for health checker
+	HostToGroup     map[string]string              // normalized host -> group name
 }
 
 func Load(path string) (*RuntimeConfig, error) {
@@ -107,44 +127,96 @@ func normalizeAndValidate(cfg *Config) (*RuntimeConfig, error) {
 		}
 	}
 
-	routes := make(map[string][]string, len(cfg.Routes))
+	defaultHealthInterval := durationFromMS(cfg.Healthcheck.IntervalMS, defaultHealthInterval)
+	defaultHealthTimeout := durationFromMS(cfg.Healthcheck.TimeoutMS, defaultHealthTimeout)
+	if defaultHealthTimeout > defaultHealthInterval {
+		return nil, errors.New("healthcheck.timeout_ms must be <= healthcheck.interval_ms")
+	}
+	defaultHealthPath := strings.TrimSpace(cfg.Healthcheck.Path)
+	if defaultHealthPath != "" && !strings.HasPrefix(defaultHealthPath, "/") {
+		defaultHealthPath = "/" + defaultHealthPath
+	}
+
+	if len(cfg.Backends) == 0 {
+		return nil, errors.New("backends must contain at least one group")
+	}
 	if len(cfg.Routes) == 0 {
 		return nil, errors.New("routes must contain at least one host")
 	}
 
-	for host, backends := range cfg.Routes {
+	routes := make(map[string][]string, len(cfg.Routes))
+	hostToGroup := make(map[string]string, len(cfg.Routes))
+	var backendGroups []BackendGroupConfig
+
+	for groupName, group := range cfg.Backends {
+		groupName = strings.TrimSpace(groupName)
+		if groupName == "" {
+			return nil, errors.New("backends contains empty group name")
+		}
+		if len(group.Addresses) == 0 {
+			return nil, fmt.Errorf("backends[%q] must contain at least one address", groupName)
+		}
+
+		normalizedAddrs := make([]string, 0, len(group.Addresses))
+		for _, addr := range group.Addresses {
+			addr = strings.TrimSpace(addr)
+			if addr == "" {
+				return nil, fmt.Errorf("backends[%q] contains empty address", groupName)
+			}
+			tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid backend %q in group %q: %w", addr, groupName, err)
+			}
+			if tcpAddr.IP == nil || tcpAddr.IP.IsUnspecified() {
+				return nil, fmt.Errorf("backend %q in group %q must use a concrete IP", addr, groupName)
+			}
+			normalizedAddrs = append(normalizedAddrs, net.JoinHostPort(tcpAddr.IP.String(), fmt.Sprintf("%d", tcpAddr.Port)))
+		}
+
+		interval := durationFromMS(group.Healthcheck.IntervalMS, defaultHealthInterval)
+		timeout := durationFromMS(group.Healthcheck.TimeoutMS, defaultHealthTimeout)
+		if timeout > interval {
+			return nil, fmt.Errorf("backends[%q].healthcheck.timeout_ms must be <= interval_ms", groupName)
+		}
+		path := strings.TrimSpace(group.Healthcheck.Path)
+		if path != "" && !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		if path == "" {
+			path = defaultHealthPath
+		}
+
+		backendGroups = append(backendGroups, BackendGroupConfig{
+			Name:      groupName,
+			Addresses: normalizedAddrs,
+			Interval:  interval,
+			Timeout:   timeout,
+			Path:      path,
+		})
+	}
+
+	for host, groupName := range cfg.Routes {
 		normalizedHost := normalizeHost(host)
 		if normalizedHost == "" {
 			return nil, errors.New("routes contains empty host key")
 		}
-		if len(backends) == 0 {
-			return nil, fmt.Errorf("routes[%q] must contain at least one backend", host)
+		groupName = strings.TrimSpace(groupName)
+		if groupName == "" {
+			return nil, fmt.Errorf("routes[%q] has empty group name", host)
+		}
+		group, ok := cfg.Backends[groupName]
+		if !ok {
+			return nil, fmt.Errorf("routes[%q] references unknown group %q", host, groupName)
 		}
 
-		normalizedBackends := make([]string, 0, len(backends))
-		for _, backend := range backends {
-			addr := strings.TrimSpace(backend)
-			if addr == "" {
-				return nil, fmt.Errorf("routes[%q] contains empty backend address", host)
-			}
-			tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
-			if err != nil {
-				return nil, fmt.Errorf("invalid backend %q for host %q: %w", addr, host, err)
-			}
-			if tcpAddr.IP == nil || tcpAddr.IP.IsUnspecified() {
-				return nil, fmt.Errorf("backend %q for host %q must use a concrete IP", addr, host)
-			}
-
-			normalizedBackends = append(normalizedBackends, net.JoinHostPort(tcpAddr.IP.String(), fmt.Sprintf("%d", tcpAddr.Port)))
+		normalizedAddrs := make([]string, 0, len(group.Addresses))
+		for _, addr := range group.Addresses {
+			addr = strings.TrimSpace(addr)
+			tcpAddr, _ := net.ResolveTCPAddr("tcp", addr)
+			normalizedAddrs = append(normalizedAddrs, net.JoinHostPort(tcpAddr.IP.String(), fmt.Sprintf("%d", tcpAddr.Port)))
 		}
-
-		routes[normalizedHost] = normalizedBackends
-	}
-
-	healthInterval := durationFromMS(cfg.Healthcheck.IntervalMS, defaultHealthInterval)
-	healthTimeout := durationFromMS(cfg.Healthcheck.TimeoutMS, defaultHealthTimeout)
-	if healthTimeout > healthInterval {
-		return nil, errors.New("healthcheck.timeout_ms must be <= healthcheck.interval_ms")
+		routes[normalizedHost] = normalizedAddrs
+		hostToGroup[normalizedHost] = groupName
 	}
 
 	dialTimeout := durationFromMS(cfg.Timeouts.DialMS, defaultDialTimeout)
@@ -155,20 +227,20 @@ func normalizeAndValidate(cfg *Config) (*RuntimeConfig, error) {
 	shutdownGrace := durationFromMS(cfg.Timeouts.ShutdownGracePeriod, defaultShutdownGrace)
 
 	return &RuntimeConfig{
-		ListenAddr:          cfg.Server.ListenAddr,
-		MetricsEnabled:      metricsEnabled,
-		MetricsListenAddr:   metricsListenAddr,
-		MaxConnections:      cfg.Server.MaxConnections,
-		MaxInflightDials:    cfg.Server.MaxInflightDials,
-		HealthcheckInterval: healthInterval,
-		HealthcheckTimeout:  healthTimeout,
-		DialTimeout:         dialTimeout,
-		ReadTimeout:         readTimeout,
-		WriteTimeout:        writeTimeout,
-		IdleTimeout:         idleTimeout,
-		TCPKeepAlive:        keepAlive,
-		ShutdownGrace:       shutdownGrace,
-		Routes:              routes,
+		ListenAddr:        cfg.Server.ListenAddr,
+		MetricsEnabled:    metricsEnabled,
+		MetricsListenAddr: metricsListenAddr,
+		MaxConnections:    cfg.Server.MaxConnections,
+		MaxInflightDials:  cfg.Server.MaxInflightDials,
+		DialTimeout:       dialTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+		TCPKeepAlive:      keepAlive,
+		ShutdownGrace:     shutdownGrace,
+		Routes:            routes,
+		BackendGroups:     backendGroups,
+		HostToGroup:       hostToGroup,
 	}, nil
 }
 

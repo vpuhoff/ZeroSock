@@ -7,9 +7,11 @@ metrics:
   enabled: true
   listen_addr: "127.0.0.1:9090"
 
+# Optional: defaults for healthcheck when a backend group does not set them
 healthcheck:
   interval_ms: 5000
   timeout_ms: 2000
+  # path: "/healthz"   # if set, L7 HTTP GET; empty = L4 TCP only
 
 tcp:
   keepalive_ms: 30000
@@ -21,12 +23,27 @@ timeouts:
   idle_ms: 300000
   shutdown_grace_period_ms: 10000
 
-routes:
-  "api.internal":
-    - "10.0.1.10:8080"
-    - "10.0.1.11:8080"
-    - "10.0.1.12:8080"
+backends:
+  api-pool:
+    addresses:
+      - "10.0.1.10:8080"
+      - "10.0.1.11:8080"
+      - "10.0.1.12:8080"
+    healthcheck:
+      interval_ms: 5000
+      timeout_ms: 2000
+      path: "/healthz"
 
-  "git.internal":
-    - "192.168.5.50:443"
-    - "192.168.5.51:443"
+  git-pool:
+    addresses:
+      - "192.168.5.50:443"
+      - "192.168.5.51:443"
+    healthcheck:
+      interval_ms: 10000
+      timeout_ms: 3000
+      # path not set = L4 TCP only
+
+routes:
+  "api.internal": "api-pool"
+  "api.example.com": "api-pool"
+  "git.internal": "git-pool"

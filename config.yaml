@@ -21,24 +21,50 @@ timeouts:
   idle_ms: 600000
   shutdown_grace_period_ms: 10000
 
+backends:
+  github:
+    addresses:
+      - "140.82.121.4:443"
+    healthcheck: {}
+  quay:
+    addresses:
+      - "54.235.146.154:443"
+      - "34.236.22.175:443"
+      - "54.166.47.210:443"
+    healthcheck: {}
+  quay-cdn:
+    addresses:
+      - "2.18.244.226:443"
+      - "2.18.244.213:443"
+    healthcheck: {}
+  dns-8:
+    addresses:
+      - "8.8.8.8:443"
+    healthcheck: {}
+  dns-1:
+    addresses:
+      - "1.0.0.1:443"
+    healthcheck: {}
+  load:
+    addresses:
+      - "127.0.0.1:8088"
+    healthcheck: {}
+  hetzner:
+    addresses:
+      - "88.198.248.254:443"
+      - "88.198.248.254:80"
+    healthcheck: {}
+  tele2:
+    addresses:
+      - "90.130.70.73:80"
+    healthcheck: {}
+
 routes:
-  "github.com":
-    - "140.82.121.4:443"
-  "quay.io":
-    - "54.235.146.154:443"
-    - "34.236.22.175:443"
-    - "54.166.47.210:443"
-  "cdn01.quay.io":
-    - "2.18.244.226:443"
-    - "2.18.244.213:443"
-  "8.8.8.8":
-    - "8.8.8.8:443"
-  "1.0.0.1":
-    - "1.0.0.1:443"
-  "load.local":
-    - "127.0.0.1:8088"
-  "speed.hetzner.de":
-    - "88.198.248.254:443"
-    - "88.198.248.254:80"
-  "speedtest.tele2.net":
-    - "90.130.70.73:80"
+  "github.com": "github"
+  "quay.io": "quay"
+  "cdn01.quay.io": "quay-cdn"
+  "8.8.8.8": "dns-8"
+  "1.0.0.1": "dns-1"
+  "load.local": "load"
+  "speed.hetzner.de": "hetzner"
+  "speedtest.tele2.net": "tele2"
