@@ -1,0 +1,17 @@
+server:
+  listen_addr: "127.0.0.1:1080"
+
+healthcheck:
+  interval_ms: 5000
+  timeout_ms: 2000
+
+tcp:
+  keepalive_ms: 30000
+
+timeouts:
+  dial_ms: 4000
+  shutdown_grace_period_ms: 10000
+
+routes:
+  "github.com":
+    - "140.82.121.4:443"

@@ -1,0 +1,23 @@
+server:
+  listen_addr: "0.0.0.0:1080"
+
+healthcheck:
+  interval_ms: 5000
+  timeout_ms: 2000
+
+tcp:
+  keepalive_ms: 30000
+
+timeouts:
+  dial_ms: 4000
+  shutdown_grace_period_ms: 10000
+
+routes:
+  "api.internal":
+    - "10.0.1.10:8080"
+    - "10.0.1.11:8080"
+    - "10.0.1.12:8080"
+
+  "git.internal":
+    - "192.168.5.50:443"
+    - "192.168.5.51:443"
