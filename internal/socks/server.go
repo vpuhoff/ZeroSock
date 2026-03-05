@@ -9,35 +9,26 @@ import (
 	"sync"
 	"time"
 
-	socks5 "github.com/armon/go-socks5"
-
 	"zerosock/internal/router"
 )
 
 type Server struct {
 	listenAddr string
 	keepAlive  time.Duration
+	dialer     *routeDialer
 	logger     *log.Logger
-	socks      *socks5.Server
 
 	mu       sync.Mutex
 	listener net.Listener
+	wg       sync.WaitGroup
 }
 
 func New(listenAddr string, r *router.Router, dialTimeout, keepAlive time.Duration, logger *log.Logger) (*Server, error) {
-	cfg := newServerConfig(r, dialTimeout, keepAlive)
-	cfg.Logger = logger
-
-	srv, err := socks5.New(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("init socks server: %w", err)
-	}
-
 	return &Server{
 		listenAddr: listenAddr,
 		keepAlive:  keepAlive,
+		dialer:     newRouteDialer(r, dialTimeout, keepAlive),
 		logger:     logger,
-		socks:      srv,
 	}, nil
 }
 
@@ -55,11 +46,28 @@ func (s *Server) Serve() error {
 	s.mu.Unlock()
 
 	s.logger.Printf("socks5: listening on %s", s.listenAddr)
-	err = s.socks.Serve(ln)
-	if err != nil && !errors.Is(err, net.ErrClosed) {
-		return fmt.Errorf("socks serve: %w", err)
+	for {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			if errors.Is(acceptErr, net.ErrClosed) {
+				return nil
+			}
+			return fmt.Errorf("accept: %w", acceptErr)
+		}
+
+		client, ok := conn.(*net.TCPConn)
+		if !ok {
+			s.logger.Printf("socks5: rejecting non-tcp connection type=%T", conn)
+			_ = conn.Close()
+			continue
+		}
+
+		_ = client.SetKeepAlive(true)
+		_ = client.SetKeepAlivePeriod(s.keepAlive)
+
+		s.wg.Add(1)
+		go s.serveClient(client)
 	}
-	return nil
 }
 
 func (s *Server) Shutdown() error {
@@ -69,4 +77,31 @@ func (s *Server) Shutdown() error {
 		return nil
 	}
 	return s.listener.Close()
+}
+
+func (s *Server) Wait(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (s *Server) serveClient(client *net.TCPConn) {
+	defer s.wg.Done()
+	defer client.Close()
+
+	if err := handleConnection(client, s.dialer); err != nil {
+		s.logger.Printf("socks5: connection error from=%s err=%v", client.RemoteAddr(), err)
+	}
 }

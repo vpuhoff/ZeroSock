@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"zerosock/internal/config"
 	"zerosock/internal/health"
@@ -68,12 +67,18 @@ func main() {
 	}
 
 	logger.Printf("shutdown: allowing active tunnels to finish for %s", cfg.ShutdownGrace)
-	graceTimer := time.NewTimer(cfg.ShutdownGrace)
-	defer graceTimer.Stop()
+	waitDone := make(chan bool, 1)
+	go func() {
+		waitDone <- server.Wait(cfg.ShutdownGrace)
+	}()
 
 	select {
-	case <-graceTimer.C:
-		logger.Printf("shutdown: grace period elapsed")
+	case done := <-waitDone:
+		if done {
+			logger.Printf("shutdown: all active tunnels finished")
+		} else {
+			logger.Printf("shutdown: grace period elapsed with active tunnels")
+		}
 	case sig := <-sigCh:
 		logger.Printf("shutdown: second signal %s, exiting immediately", sig)
 	}

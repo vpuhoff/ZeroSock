@@ -4,11 +4,15 @@ High-performance SOCKS5 L4 router in Go.
 
 ## Features
 
-- SOCKS5 input (`NO AUTH`, `CONNECT`) via `github.com/armon/go-socks5`
+- Custom minimal SOCKS5 parser (no third-party SOCKS library)
+- Supported auth methods: `NO AUTH` only
+- Supported commands: `CONNECT` only
+- Supported ATYP: IPv4 (`0x01`) and FQDN (`0x03`)
+- Unsupported by design: IPv6 (`0x04`), `BIND`, `UDP ASSOCIATE`
 - Host-based routing by FQDN from local YAML config
 - Round-robin load balancing across backend IP pools
 - TCP healthchecks with `Alive/Dead` backend rotation
-- Zero-copy-friendly data path (`io.Copy` on raw TCP connections, no custom wrappers)
+- Strict zero-copy-compatible relay (`io.Copy` between raw `*net.TCPConn`, no `bufio.Reader` in data plane)
 - Graceful shutdown (`SIGINT`, `SIGTERM`) with configurable grace period
 
 ## Requirements
@@ -52,5 +56,6 @@ routes:
 ## Behavior
 
 - If destination host from SOCKS5 request exists in `routes`, ZeroSock picks an `Alive` backend via round robin and dials backend IP directly.
+- For IPv4 SOCKS requests, routing key is the IPv4 string (for example `203.0.113.10`) and must exist in `routes` if used.
 - If host does not exist in config, request is denied.
 - If all backends for host are dead, request is denied until healthcheck marks at least one backend alive.

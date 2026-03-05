@@ -1,15 +1,12 @@
 package socks
 
 import (
-	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
-	"strconv"
 	"strings"
 	"time"
-
-	socks5 "github.com/armon/go-socks5"
 
 	"zerosock/internal/router"
 )
@@ -28,32 +25,16 @@ func newRouteDialer(r *router.Router, dialTimeout, keepAlive time.Duration) *rou
 	}
 }
 
-func (d *routeDialer) Dial(_ context.Context, network, addr string) (net.Conn, error) {
-	if network != "tcp" {
-		return nil, fmt.Errorf("unsupported network: %s", network)
-	}
-
-	host, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid destination %q: %w", addr, err)
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid destination port %q: %w", portStr, err)
-	}
-	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("destination port out of range: %d", port)
-	}
-
-	target, err := d.router.Pick(normalizeHost(host))
+func (d *routeDialer) DialRoute(routeHost string) (*net.TCPConn, string, error) {
+	target, err := d.router.Pick(normalizeHost(routeHost))
 	if err != nil {
 		if errors.Is(err, router.ErrRouteNotFound) {
-			return nil, fmt.Errorf("route for host %q not found", host)
+			return nil, "", fmt.Errorf("route for host %q not found", routeHost)
 		}
 		if errors.Is(err, router.ErrNoAliveBackends) {
-			return nil, fmt.Errorf("no alive backends for host %q", host)
+			return nil, "", fmt.Errorf("no alive backends for host %q", routeHost)
 		}
-		return nil, fmt.Errorf("pick backend for host %q: %w", host, err)
+		return nil, "", fmt.Errorf("pick backend for host %q: %w", routeHost, err)
 	}
 
 	dialer := &net.Dialer{
@@ -62,34 +43,73 @@ func (d *routeDialer) Dial(_ context.Context, network, addr string) (net.Conn, e
 	}
 	conn, err := dialer.Dial("tcp", target)
 	if err != nil {
-		return nil, fmt.Errorf("dial backend %q for host %q: %w", target, host, err)
+		return nil, target, fmt.Errorf("dial backend %q for host %q: %w", target, routeHost, err)
 	}
 
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetKeepAlive(true)
-		_ = tcpConn.SetKeepAlivePeriod(d.keepAlive)
+	tcpConn, ok := conn.(*net.TCPConn)
+	if !ok {
+		_ = conn.Close()
+		return nil, target, fmt.Errorf("backend connection for %q is not TCP", target)
 	}
-
-	return conn, nil
+	_ = tcpConn.SetKeepAlive(true)
+	_ = tcpConn.SetKeepAlivePeriod(d.keepAlive)
+	return tcpConn, target, nil
 }
 
-// passThroughResolver preserves FQDN and prevents system DNS lookups.
-type passThroughResolver struct{}
+func handleConnection(client *net.TCPConn, dialer *routeDialer) error {
+	if err := handleHandshake(client); err != nil {
+		return err
+	}
 
-func (passThroughResolver) Resolve(ctx context.Context, _ string) (context.Context, net.IP, error) {
-	return ctx, nil, nil
+	req, err := readRequest(client)
+	if err != nil {
+		return err
+	}
+
+	backendConn, _, err := dialer.DialRoute(req.RouteKey())
+	if err != nil {
+		_ = writeFailureReply(client, replyHostUnreachable)
+		return err
+	}
+	defer backendConn.Close()
+
+	if err := writeSuccessReply(client, backendConn.LocalAddr()); err != nil {
+		return fmt.Errorf("write success reply: %w", err)
+	}
+
+	return relay(client, backendConn)
+}
+
+func relay(client, backend *net.TCPConn) error {
+	errCh := make(chan error, 2)
+	go copyHalf(backend, client, errCh)
+	go copyHalf(client, backend, errCh)
+
+	var firstErr error
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil && !isIgnorableCopyError(err) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func copyHalf(dst, src *net.TCPConn, errCh chan<- error) {
+	_, err := io.Copy(dst, src)
+	_ = dst.CloseWrite()
+	errCh <- err
+}
+
+func isIgnorableCopyError(err error) bool {
+	if err == nil {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "closed network connection") || strings.Contains(msg, "broken pipe")
 }
 
 func normalizeHost(host string) string {
 	host = strings.TrimSpace(strings.ToLower(host))
 	host = strings.TrimSuffix(host, ".")
 	return host
-}
-
-func newServerConfig(r *router.Router, dialTimeout, keepAlive time.Duration) *socks5.Config {
-	rd := newRouteDialer(r, dialTimeout, keepAlive)
-	return &socks5.Config{
-		Resolver: passThroughResolver{},
-		Dial:     rd.Dial,
-	}
 }
