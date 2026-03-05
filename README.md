@@ -75,6 +75,7 @@ Exported base metrics include:
 - `zerosock_connections_total`, `zerosock_connections_active`
 - `zerosock_handshake_latency_seconds`
 - `zerosock_requests_total{atyp=...}`
+- `zerosock_requests_backend_total{host,backend,result}`
 - `zerosock_route_failures_total{host,reason}`
 - `zerosock_backend_dial_latency_seconds`, `zerosock_backend_dial_failures_total{host,reason}`
 - `zerosock_relay_bytes_total{direction=...}`, `zerosock_relay_session_bytes{direction=...}`

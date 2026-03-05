@@ -16,6 +16,7 @@ type Collector struct {
 	mu                sync.Mutex
 	connectionErrors  map[string]uint64
 	requestsTotal     map[string]uint64
+	requestsByBackend map[string]uint64
 	routeFailures     map[string]uint64
 	backendDialFailed map[string]uint64
 	relayBytes        map[string]uint64
@@ -34,6 +35,7 @@ func NewCollector() *Collector {
 	return &Collector{
 		connectionErrors:  make(map[string]uint64),
 		requestsTotal:     make(map[string]uint64),
+		requestsByBackend: make(map[string]uint64),
 		routeFailures:     make(map[string]uint64),
 		backendDialFailed: make(map[string]uint64),
 		relayBytes:        make(map[string]uint64),
@@ -71,6 +73,25 @@ func (c *Collector) IncRequest(atyp string) {
 	}
 	c.mu.Lock()
 	c.requestsTotal[atyp]++
+	c.mu.Unlock()
+}
+
+func (c *Collector) IncRequestByBackend(host, backend, result string) {
+	if c == nil {
+		return
+	}
+	if host == "" {
+		host = "unknown"
+	}
+	if backend == "" {
+		backend = "none"
+	}
+	if result == "" {
+		result = "unknown"
+	}
+	key := fmt.Sprintf("host=%s,backend=%s,result=%s", host, backend, result)
+	c.mu.Lock()
+	c.requestsByBackend[key]++
 	c.mu.Unlock()
 }
 
@@ -175,6 +196,7 @@ func (c *Collector) RenderPrometheusText() string {
 
 	writeLabelCounters(&b, "zerosock_connection_errors_total", "stage", c.connectionErrors)
 	writeLabelCounters(&b, "zerosock_requests_total", "atyp", c.requestsTotal)
+	writeKVLabelCounters(&b, "zerosock_requests_backend_total", c.requestsByBackend)
 	writeKVLabelCounters(&b, "zerosock_route_failures_total", c.routeFailures)
 	writeKVLabelCounters(&b, "zerosock_backend_dial_failures_total", c.backendDialFailed)
 	writeLabelCounters(&b, "zerosock_relay_bytes_total", "direction", c.relayBytes)

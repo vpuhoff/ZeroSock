@@ -71,15 +71,17 @@ func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Colle
 		m.IncConnectionError("request")
 		return err
 	}
+	routeHost := req.RouteKey()
 	m.IncRequest(atypLabel(req.atyp))
 
 	dialStart := time.Now()
-	backendConn, _, err := dialer.DialRoute(req.RouteKey())
+	backendConn, backendAddr, err := dialer.DialRoute(routeHost)
 	m.ObserveBackendDialLatency(time.Since(dialStart))
 	if err != nil {
 		reason := classifyDialError(err)
-		m.IncBackendDialFailure(req.RouteKey(), reason)
-		m.IncRouteFailure(req.RouteKey(), reason)
+		m.IncBackendDialFailure(routeHost, reason)
+		m.IncRouteFailure(routeHost, reason)
+		m.IncRequestByBackend(routeHost, backendAddr, reason)
 		m.IncConnectionError("backend_dial")
 		_ = writeFailureReply(client, replyHostUnreachable)
 		return err
@@ -87,14 +89,17 @@ func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Colle
 	defer backendConn.Close()
 
 	if err := writeSuccessReply(client, backendConn.LocalAddr()); err != nil {
+		m.IncRequestByBackend(routeHost, backendAddr, "reply_error")
 		m.IncConnectionError("reply")
 		return fmt.Errorf("write success reply: %w", err)
 	}
 
 	if err := relay(client, backendConn, m); err != nil {
+		m.IncRequestByBackend(routeHost, backendAddr, "relay_error")
 		m.IncConnectionError("relay")
 		return err
 	}
+	m.IncRequestByBackend(routeHost, backendAddr, "success")
 	m.ObserveSessionDuration(time.Since(sessionStart))
 	return nil
 }
@@ -125,7 +130,10 @@ func isIgnorableCopyError(err error) bool {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "closed network connection") || strings.Contains(msg, "broken pipe")
+	return strings.Contains(msg, "closed network connection") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "forcibly closed by the remote host")
 }
 
 func normalizeHost(host string) string {
