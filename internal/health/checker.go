@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"zerosock/internal/metrics"
 	"zerosock/internal/router"
 )
 
@@ -14,14 +15,16 @@ type Checker struct {
 	interval time.Duration
 	timeout  time.Duration
 	logger   *log.Logger
+	metrics  *metrics.Collector
 }
 
-func New(r *router.Router, interval, timeout time.Duration, logger *log.Logger) *Checker {
+func New(r *router.Router, interval, timeout time.Duration, logger *log.Logger, m *metrics.Collector) *Checker {
 	return &Checker{
 		router:   r,
 		interval: interval,
 		timeout:  timeout,
 		logger:   logger,
+		metrics:  m,
 	}
 }
 
@@ -45,6 +48,7 @@ func (c *Checker) Start(ctx context.Context) {
 func (c *Checker) probeAll() {
 	for _, state := range c.router.Snapshot() {
 		alive := c.probe(state.Address)
+		c.metrics.ObserveHealthcheck(state.Host, state.Address, alive)
 		changed, err := c.router.SetBackendAlive(state.Host, state.Address, alive)
 		if err != nil {
 			c.logger.Printf("health: failed to update backend state host=%s backend=%s err=%v", state.Host, state.Address, err)

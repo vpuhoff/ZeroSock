@@ -11,6 +11,7 @@ import (
 
 	"zerosock/internal/config"
 	"zerosock/internal/health"
+	"zerosock/internal/metrics"
 	"zerosock/internal/router"
 	"zerosock/internal/socks"
 )
@@ -31,15 +32,22 @@ func main() {
 		logger.Fatalf("router init error: %v", err)
 	}
 
+	metricCollector := metrics.NewCollector()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	checker := health.New(rt, cfg.HealthcheckInterval, cfg.HealthcheckTimeout, logger)
+	checker := health.New(rt, cfg.HealthcheckInterval, cfg.HealthcheckTimeout, logger, metricCollector)
 	go checker.Start(ctx)
 
-	server, err := socks.New(cfg.ListenAddr, rt, cfg.DialTimeout, cfg.TCPKeepAlive, logger)
+	server, err := socks.New(cfg.ListenAddr, rt, cfg.DialTimeout, cfg.TCPKeepAlive, logger, metricCollector)
 	if err != nil {
 		logger.Fatalf("server init error: %v", err)
+	}
+
+	var metricsErrCh <-chan error
+	if cfg.MetricsEnabled {
+		metricsErrCh = metrics.StartHTTP(ctx, cfg.MetricsListenAddr, metricCollector, logger)
 	}
 
 	serveErrCh := make(chan error, 1)
@@ -55,6 +63,11 @@ func main() {
 	case err := <-serveErrCh:
 		if err != nil {
 			logger.Fatalf("serve failed: %v", err)
+		}
+		return
+	case err := <-metricsErrCh:
+		if err != nil {
+			logger.Fatalf("metrics serve failed: %v", err)
 		}
 		return
 	case sig := <-sigCh:

@@ -25,7 +25,7 @@ func TestProbeAllUpdatesBackendStatus(t *testing.T) {
 	}
 
 	logger := log.New(io.Discard, "", 0)
-	c := New(r, 200*time.Millisecond, 100*time.Millisecond, logger)
+	c := New(r, 200*time.Millisecond, 100*time.Millisecond, logger, nil)
 	c.probeAll()
 
 	snapshot := r.Snapshot()

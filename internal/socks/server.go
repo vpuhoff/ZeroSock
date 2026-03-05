@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"zerosock/internal/metrics"
 	"zerosock/internal/router"
 )
 
@@ -17,18 +18,20 @@ type Server struct {
 	keepAlive  time.Duration
 	dialer     *routeDialer
 	logger     *log.Logger
+	metrics    *metrics.Collector
 
 	mu       sync.Mutex
 	listener net.Listener
 	wg       sync.WaitGroup
 }
 
-func New(listenAddr string, r *router.Router, dialTimeout, keepAlive time.Duration, logger *log.Logger) (*Server, error) {
+func New(listenAddr string, r *router.Router, dialTimeout, keepAlive time.Duration, logger *log.Logger, m *metrics.Collector) (*Server, error) {
 	return &Server{
 		listenAddr: listenAddr,
 		keepAlive:  keepAlive,
 		dialer:     newRouteDialer(r, dialTimeout, keepAlive),
 		logger:     logger,
+		metrics:    m,
 	}, nil
 }
 
@@ -65,6 +68,7 @@ func (s *Server) Serve() error {
 		_ = client.SetKeepAlive(true)
 		_ = client.SetKeepAlivePeriod(s.keepAlive)
 
+		s.metrics.IncConnectionAccepted()
 		s.wg.Add(1)
 		go s.serveClient(client)
 	}
@@ -100,8 +104,9 @@ func (s *Server) Wait(timeout time.Duration) bool {
 func (s *Server) serveClient(client *net.TCPConn) {
 	defer s.wg.Done()
 	defer client.Close()
+	defer s.metrics.DecConnectionActive()
 
-	if err := handleConnection(client, s.dialer); err != nil {
+	if err := handleConnection(client, s.dialer, s.metrics); err != nil {
 		s.logger.Printf("socks5: connection error from=%s err=%v", client.RemoteAddr(), err)
 	}
 }

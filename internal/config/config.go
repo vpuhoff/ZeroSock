@@ -24,6 +24,11 @@ type Config struct {
 		ListenAddr string `yaml:"listen_addr"`
 	} `yaml:"server"`
 
+	Metrics struct {
+		Enabled    *bool  `yaml:"enabled"`
+		ListenAddr string `yaml:"listen_addr"`
+	} `yaml:"metrics"`
+
 	Healthcheck struct {
 		IntervalMS int `yaml:"interval_ms"`
 		TimeoutMS  int `yaml:"timeout_ms"`
@@ -43,6 +48,8 @@ type Config struct {
 
 type RuntimeConfig struct {
 	ListenAddr          string
+	MetricsEnabled      bool
+	MetricsListenAddr   string
 	HealthcheckInterval time.Duration
 	HealthcheckTimeout  time.Duration
 	DialTimeout         time.Duration
@@ -71,6 +78,20 @@ func normalizeAndValidate(cfg *Config) (*RuntimeConfig, error) {
 	}
 	if _, err := net.ResolveTCPAddr("tcp", cfg.Server.ListenAddr); err != nil {
 		return nil, fmt.Errorf("invalid server.listen_addr: %w", err)
+	}
+
+	metricsEnabled := true
+	if cfg.Metrics.Enabled != nil {
+		metricsEnabled = *cfg.Metrics.Enabled
+	}
+	metricsListenAddr := strings.TrimSpace(cfg.Metrics.ListenAddr)
+	if metricsEnabled {
+		if metricsListenAddr == "" {
+			metricsListenAddr = "127.0.0.1:9090"
+		}
+		if _, err := net.ResolveTCPAddr("tcp", metricsListenAddr); err != nil {
+			return nil, fmt.Errorf("invalid metrics.listen_addr: %w", err)
+		}
 	}
 
 	routes := make(map[string][]string, len(cfg.Routes))
@@ -119,6 +140,8 @@ func normalizeAndValidate(cfg *Config) (*RuntimeConfig, error) {
 
 	return &RuntimeConfig{
 		ListenAddr:          cfg.Server.ListenAddr,
+		MetricsEnabled:      metricsEnabled,
+		MetricsListenAddr:   metricsListenAddr,
 		HealthcheckInterval: healthInterval,
 		HealthcheckTimeout:  healthTimeout,
 		DialTimeout:         dialTimeout,

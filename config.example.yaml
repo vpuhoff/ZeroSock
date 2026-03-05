@@ -1,6 +1,10 @@
 server:
   listen_addr: "0.0.0.0:1080"
 
+metrics:
+  enabled: true
+  listen_addr: "127.0.0.1:9090"
+
 healthcheck:
   interval_ms: 5000
   timeout_ms: 2000

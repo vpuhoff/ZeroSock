@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"zerosock/internal/metrics"
 	"zerosock/internal/router"
 )
 
@@ -56,34 +57,52 @@ func (d *routeDialer) DialRoute(routeHost string) (*net.TCPConn, string, error) 
 	return tcpConn, target, nil
 }
 
-func handleConnection(client *net.TCPConn, dialer *routeDialer) error {
+func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Collector) error {
+	sessionStart := time.Now()
+	handshakeStart := time.Now()
 	if err := handleHandshake(client); err != nil {
+		m.IncConnectionError("handshake")
 		return err
 	}
 
 	req, err := readRequest(client)
+	m.ObserveHandshakeLatency(time.Since(handshakeStart))
 	if err != nil {
+		m.IncConnectionError("request")
 		return err
 	}
+	m.IncRequest(atypLabel(req.atyp))
 
+	dialStart := time.Now()
 	backendConn, _, err := dialer.DialRoute(req.RouteKey())
+	m.ObserveBackendDialLatency(time.Since(dialStart))
 	if err != nil {
+		reason := classifyDialError(err)
+		m.IncBackendDialFailure(req.RouteKey(), reason)
+		m.IncRouteFailure(req.RouteKey(), reason)
+		m.IncConnectionError("backend_dial")
 		_ = writeFailureReply(client, replyHostUnreachable)
 		return err
 	}
 	defer backendConn.Close()
 
 	if err := writeSuccessReply(client, backendConn.LocalAddr()); err != nil {
+		m.IncConnectionError("reply")
 		return fmt.Errorf("write success reply: %w", err)
 	}
 
-	return relay(client, backendConn)
+	if err := relay(client, backendConn, m); err != nil {
+		m.IncConnectionError("relay")
+		return err
+	}
+	m.ObserveSessionDuration(time.Since(sessionStart))
+	return nil
 }
 
-func relay(client, backend *net.TCPConn) error {
+func relay(client, backend *net.TCPConn, m *metrics.Collector) error {
 	errCh := make(chan error, 2)
-	go copyHalf(backend, client, errCh)
-	go copyHalf(client, backend, errCh)
+	go copyHalf(backend, client, "client_to_backend", m, errCh)
+	go copyHalf(client, backend, "backend_to_client", m, errCh)
 
 	var firstErr error
 	for i := 0; i < 2; i++ {
@@ -94,8 +113,9 @@ func relay(client, backend *net.TCPConn) error {
 	return firstErr
 }
 
-func copyHalf(dst, src *net.TCPConn, errCh chan<- error) {
-	_, err := io.Copy(dst, src)
+func copyHalf(dst, src *net.TCPConn, direction string, m *metrics.Collector, errCh chan<- error) {
+	n, err := io.Copy(dst, src)
+	m.AddRelayBytes(direction, n)
 	_ = dst.CloseWrite()
 	errCh <- err
 }
@@ -112,4 +132,29 @@ func normalizeHost(host string) string {
 	host = strings.TrimSpace(strings.ToLower(host))
 	host = strings.TrimSuffix(host, ".")
 	return host
+}
+
+func atypLabel(atyp byte) string {
+	switch atyp {
+	case atypIPv4:
+		return "ipv4"
+	case atypFQDN:
+		return "fqdn"
+	default:
+		return "unknown"
+	}
+}
+
+func classifyDialError(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "route for host"):
+		return "route_not_found"
+	case strings.Contains(msg, "no alive backends"):
+		return "no_alive_backends"
+	case strings.Contains(msg, "timeout"):
+		return "timeout"
+	default:
+		return "dial_error"
+	}
 }
