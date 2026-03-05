@@ -10,10 +10,11 @@ OUT_DIR="${OUT_DIR:-$ROOT_DIR/k6_runs/$(date +%Y%m%d_%H%M%S)}"
 VUS_LIST="${VUS_LIST:-50 500 2000}"
 
 # Optional per-profile durations.
+# Для 500/2000 VU одна итерация (100 МБ) ~45 с — ставим дольше, чтобы итерации успевали завершаться.
 DURATION_DEFAULT="${DURATION_DEFAULT:-20s}"
 DURATION_50="${DURATION_50:-$DURATION_DEFAULT}"
-DURATION_500="${DURATION_500:-$DURATION_DEFAULT}"
-DURATION_2000="${DURATION_2000:-$DURATION_DEFAULT}"
+DURATION_500="${DURATION_500:-120s}"
+DURATION_2000="${DURATION_2000:-600s}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
