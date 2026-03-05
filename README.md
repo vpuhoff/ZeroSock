@@ -39,6 +39,8 @@ Example structure (full template in `config.example.yaml`):
 ```yaml
 server:
   listen_addr: "0.0.0.0:1080"
+  max_connections: 4096
+  max_inflight_dials: 2048
 
 metrics:
   enabled: true
@@ -53,6 +55,9 @@ tcp:
 
 timeouts:
   dial_ms: 4000
+  read_ms: 10000
+  write_ms: 10000
+  idle_ms: 300000
   shutdown_grace_period_ms: 10000
 
 routes:
@@ -67,6 +72,9 @@ routes:
 - For IPv4 SOCKS requests, routing key is the IPv4 string (for example `203.0.113.10`) and must exist in `routes` if used.
 - If host does not exist in config, request is denied.
 - If all backends for host are dead, request is denied until healthcheck marks at least one backend alive.
+- `server.max_connections` limits simultaneously handled client sessions.
+- `server.max_inflight_dials` limits concurrent backend dial attempts.
+- `timeouts.read_ms`, `timeouts.write_ms`, and `timeouts.idle_ms` control socket deadlines.
 
 ## Metrics (Prometheus)
 

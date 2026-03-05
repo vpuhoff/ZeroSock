@@ -17,11 +17,16 @@ const (
 	defaultDialTimeout    = 4 * time.Second
 	defaultTCPKeepAlive   = 30 * time.Second
 	defaultShutdownGrace  = 10 * time.Second
+	defaultReadTimeout    = 10 * time.Second
+	defaultWriteTimeout   = 10 * time.Second
+	defaultIdleTimeout    = 5 * time.Minute
 )
 
 type Config struct {
 	Server struct {
-		ListenAddr string `yaml:"listen_addr"`
+		ListenAddr       string `yaml:"listen_addr"`
+		MaxConnections   int    `yaml:"max_connections"`
+		MaxInflightDials int    `yaml:"max_inflight_dials"`
 	} `yaml:"server"`
 
 	Metrics struct {
@@ -41,6 +46,9 @@ type Config struct {
 	Timeouts struct {
 		DialMS              int `yaml:"dial_ms"`
 		ShutdownGracePeriod int `yaml:"shutdown_grace_period_ms"`
+		ReadMS              int `yaml:"read_ms"`
+		WriteMS             int `yaml:"write_ms"`
+		IdleMS              int `yaml:"idle_ms"`
 	} `yaml:"timeouts"`
 
 	Routes map[string][]string `yaml:"routes"`
@@ -50,9 +58,14 @@ type RuntimeConfig struct {
 	ListenAddr          string
 	MetricsEnabled      bool
 	MetricsListenAddr   string
+	MaxConnections      int
+	MaxInflightDials    int
 	HealthcheckInterval time.Duration
 	HealthcheckTimeout  time.Duration
 	DialTimeout         time.Duration
+	ReadTimeout         time.Duration
+	WriteTimeout        time.Duration
+	IdleTimeout         time.Duration
 	TCPKeepAlive        time.Duration
 	ShutdownGrace       time.Duration
 	Routes              map[string][]string
@@ -135,6 +148,9 @@ func normalizeAndValidate(cfg *Config) (*RuntimeConfig, error) {
 	}
 
 	dialTimeout := durationFromMS(cfg.Timeouts.DialMS, defaultDialTimeout)
+	readTimeout := durationFromMS(cfg.Timeouts.ReadMS, defaultReadTimeout)
+	writeTimeout := durationFromMS(cfg.Timeouts.WriteMS, defaultWriteTimeout)
+	idleTimeout := durationFromMS(cfg.Timeouts.IdleMS, defaultIdleTimeout)
 	keepAlive := durationFromMS(cfg.TCP.KeepAliveMS, defaultTCPKeepAlive)
 	shutdownGrace := durationFromMS(cfg.Timeouts.ShutdownGracePeriod, defaultShutdownGrace)
 
@@ -142,9 +158,14 @@ func normalizeAndValidate(cfg *Config) (*RuntimeConfig, error) {
 		ListenAddr:          cfg.Server.ListenAddr,
 		MetricsEnabled:      metricsEnabled,
 		MetricsListenAddr:   metricsListenAddr,
+		MaxConnections:      cfg.Server.MaxConnections,
+		MaxInflightDials:    cfg.Server.MaxInflightDials,
 		HealthcheckInterval: healthInterval,
 		HealthcheckTimeout:  healthTimeout,
 		DialTimeout:         dialTimeout,
+		ReadTimeout:         readTimeout,
+		WriteTimeout:        writeTimeout,
+		IdleTimeout:         idleTimeout,
 		TCPKeepAlive:        keepAlive,
 		ShutdownGrace:       shutdownGrace,
 		Routes:              routes,

@@ -16,17 +16,32 @@ type routeDialer struct {
 	router      *router.Router
 	dialTimeout time.Duration
 	keepAlive   time.Duration
+	inflightSem chan struct{}
 }
 
-func newRouteDialer(r *router.Router, dialTimeout, keepAlive time.Duration) *routeDialer {
+func newRouteDialer(r *router.Router, dialTimeout, keepAlive time.Duration, maxInflightDials int) *routeDialer {
+	var inflightSem chan struct{}
+	if maxInflightDials > 0 {
+		inflightSem = make(chan struct{}, maxInflightDials)
+	}
 	return &routeDialer{
 		router:      r,
 		dialTimeout: dialTimeout,
 		keepAlive:   keepAlive,
+		inflightSem: inflightSem,
 	}
 }
 
 func (d *routeDialer) DialRoute(routeHost string) (*net.TCPConn, string, error) {
+	if d.inflightSem != nil {
+		select {
+		case d.inflightSem <- struct{}{}:
+		default:
+			return nil, "", fmt.Errorf("dial inflight limit reached for host %q", routeHost)
+		}
+		defer func() { <-d.inflightSem }()
+	}
+
 	target, err := d.router.Pick(normalizeHost(routeHost))
 	if err != nil {
 		if errors.Is(err, router.ErrRouteNotFound) {
@@ -57,16 +72,24 @@ func (d *routeDialer) DialRoute(routeHost string) (*net.TCPConn, string, error) 
 	return tcpConn, target, nil
 }
 
-func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Collector) error {
+func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Collector, readTimeout, writeTimeout, idleTimeout time.Duration) error {
 	sessionStart := time.Now()
 	handshakeStart := time.Now()
+
+	if readTimeout > 0 {
+		_ = client.SetReadDeadline(time.Now().Add(readTimeout))
+	}
 	if err := handleHandshake(client); err != nil {
 		m.IncConnectionError("handshake")
 		return err
 	}
 
+	if readTimeout > 0 {
+		_ = client.SetReadDeadline(time.Now().Add(readTimeout))
+	}
 	req, err := readRequest(client)
 	m.ObserveHandshakeLatency(time.Since(handshakeStart))
+	_ = client.SetReadDeadline(time.Time{})
 	if err != nil {
 		m.IncConnectionError("request")
 		return err
@@ -88,10 +111,20 @@ func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Colle
 	}
 	defer backendConn.Close()
 
+	if writeTimeout > 0 {
+		_ = client.SetWriteDeadline(time.Now().Add(writeTimeout))
+	}
 	if err := writeSuccessReply(client, backendConn.LocalAddr()); err != nil {
 		m.IncRequestByBackend(routeHost, backendAddr, "reply_error")
 		m.IncConnectionError("reply")
 		return fmt.Errorf("write success reply: %w", err)
+	}
+	_ = client.SetWriteDeadline(time.Time{})
+
+	if idleTimeout > 0 {
+		// Fixed full-session idle cap without wrapping sockets, preserving io.Copy path.
+		_ = client.SetDeadline(time.Now().Add(idleTimeout))
+		_ = backendConn.SetDeadline(time.Now().Add(idleTimeout))
 	}
 
 	if err := relay(client, backendConn, m); err != nil {
@@ -160,6 +193,8 @@ func classifyDialError(err error) string {
 		return "route_not_found"
 	case strings.Contains(msg, "no alive backends"):
 		return "no_alive_backends"
+	case strings.Contains(msg, "inflight limit reached"):
+		return "dial_limit"
 	case strings.Contains(msg, "timeout"):
 		return "timeout"
 	default:

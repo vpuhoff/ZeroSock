@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func TestDialRouteRejectsUnknownHost(t *testing.T) {
 		t.Fatalf("router.New() error = %v", err)
 	}
 
-	d := newRouteDialer(r, 200*time.Millisecond, 5*time.Second)
+	d := newRouteDialer(r, 200*time.Millisecond, 5*time.Second, 0)
 	_, _, err = d.DialRoute("unknown.internal")
 	if err == nil {
 		t.Fatalf("DialRoute() expected error for unknown host")
@@ -49,7 +50,7 @@ func TestDialRouteDialsAliveBackend(t *testing.T) {
 		t.Fatalf("router.New() error = %v", err)
 	}
 
-	d := newRouteDialer(r, 500*time.Millisecond, 5*time.Second)
+	d := newRouteDialer(r, 500*time.Millisecond, 5*time.Second, 0)
 	conn, _, err := d.DialRoute("api.internal")
 	if err != nil {
 		t.Fatalf("DialRoute() error = %v", err)
@@ -60,6 +61,25 @@ func TestDialRouteDialsAliveBackend(t *testing.T) {
 	case <-accepted:
 	case <-time.After(1 * time.Second):
 		t.Fatalf("backend did not receive connection")
+	}
+}
+
+func TestDialRouteInflightLimit(t *testing.T) {
+	r, err := router.New(map[string][]string{
+		"api.internal": {"127.0.0.1:1"},
+	})
+	if err != nil {
+		t.Fatalf("router.New() error = %v", err)
+	}
+
+	d := newRouteDialer(r, time.Second, 5*time.Second, 1)
+	d.inflightSem <- struct{}{}
+	_, _, err = d.DialRoute("api.internal")
+	if err == nil {
+		t.Fatalf("DialRoute() expected inflight limit error")
+	}
+	if !strings.Contains(err.Error(), "inflight limit reached") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

@@ -40,7 +40,19 @@ func main() {
 	checker := health.New(rt, cfg.HealthcheckInterval, cfg.HealthcheckTimeout, logger, metricCollector)
 	go checker.Start(ctx)
 
-	server, err := socks.New(cfg.ListenAddr, rt, cfg.DialTimeout, cfg.TCPKeepAlive, logger, metricCollector)
+	server, err := socks.New(
+		cfg.ListenAddr,
+		rt,
+		cfg.DialTimeout,
+		cfg.TCPKeepAlive,
+		cfg.MaxConnections,
+		cfg.MaxInflightDials,
+		cfg.ReadTimeout,
+		cfg.WriteTimeout,
+		cfg.IdleTimeout,
+		logger,
+		metricCollector,
+	)
 	if err != nil {
 		logger.Fatalf("server init error: %v", err)
 	}

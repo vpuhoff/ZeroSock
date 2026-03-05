@@ -14,24 +14,45 @@ import (
 )
 
 type Server struct {
-	listenAddr string
-	keepAlive  time.Duration
-	dialer     *routeDialer
-	logger     *log.Logger
-	metrics    *metrics.Collector
+	listenAddr   string
+	keepAlive    time.Duration
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+	idleTimeout  time.Duration
+	dialer       *routeDialer
+	logger       *log.Logger
+	metrics      *metrics.Collector
+	connLimitSem chan struct{}
 
 	mu       sync.Mutex
 	listener net.Listener
 	wg       sync.WaitGroup
 }
 
-func New(listenAddr string, r *router.Router, dialTimeout, keepAlive time.Duration, logger *log.Logger, m *metrics.Collector) (*Server, error) {
+func New(
+	listenAddr string,
+	r *router.Router,
+	dialTimeout, keepAlive time.Duration,
+	maxConnections, maxInflightDials int,
+	readTimeout, writeTimeout, idleTimeout time.Duration,
+	logger *log.Logger,
+	m *metrics.Collector,
+) (*Server, error) {
+	var connLimitSem chan struct{}
+	if maxConnections > 0 {
+		connLimitSem = make(chan struct{}, maxConnections)
+	}
+
 	return &Server{
-		listenAddr: listenAddr,
-		keepAlive:  keepAlive,
-		dialer:     newRouteDialer(r, dialTimeout, keepAlive),
-		logger:     logger,
-		metrics:    m,
+		listenAddr:   listenAddr,
+		keepAlive:    keepAlive,
+		readTimeout:  readTimeout,
+		writeTimeout: writeTimeout,
+		idleTimeout:  idleTimeout,
+		dialer:       newRouteDialer(r, dialTimeout, keepAlive, maxInflightDials),
+		logger:       logger,
+		metrics:      m,
+		connLimitSem: connLimitSem,
 	}, nil
 }
 
@@ -67,6 +88,16 @@ func (s *Server) Serve() error {
 
 		_ = client.SetKeepAlive(true)
 		_ = client.SetKeepAlivePeriod(s.keepAlive)
+
+		if s.connLimitSem != nil {
+			select {
+			case s.connLimitSem <- struct{}{}:
+			default:
+				s.metrics.IncConnectionError("conn_limit")
+				_ = client.Close()
+				continue
+			}
+		}
 
 		s.metrics.IncConnectionAccepted()
 		s.wg.Add(1)
@@ -105,8 +136,11 @@ func (s *Server) serveClient(client *net.TCPConn) {
 	defer s.wg.Done()
 	defer client.Close()
 	defer s.metrics.DecConnectionActive()
+	if s.connLimitSem != nil {
+		defer func() { <-s.connLimitSem }()
+	}
 
-	if err := handleConnection(client, s.dialer, s.metrics); err != nil {
+	if err := handleConnection(client, s.dialer, s.metrics, s.readTimeout, s.writeTimeout, s.idleTimeout); err != nil {
 		s.logger.Printf("socks5: connection error from=%s err=%v", client.RemoteAddr(), err)
 	}
 }
