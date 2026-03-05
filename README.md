@@ -2,6 +2,8 @@
 
 **ZeroSock is not a tool for bypassing internet restrictions.** It is a high-performance L4 SOCKS5 router and load balancer built for server infrastructure, microservices, and large-scale data collection (e.g. scraping pipelines). It works like a scalpel: no bloat, strict destination control (whitelist-only routing), and maximum speed via zero-copy (`splice` on Linux).
 
+📖 **[Overview & documentation](https://deepwiki.com/vpuhoff/ZeroSock/1-overview)**
+
 ## Key Use Cases
 
 ### Resilient Egress Gateway and client-side load balancing
