@@ -23,7 +23,8 @@ type pool struct {
 }
 
 type Router struct {
-	pools map[string]*pool
+	pools         map[string]*pool
+	backendToHost map[string]string // backend "ip:port" -> host key (for IPv4 request resolution)
 }
 
 type BackendState struct {
@@ -38,6 +39,7 @@ func New(routes map[string][]string) (*Router, error) {
 	}
 
 	pools := make(map[string]*pool, len(routes))
+	backendToHost := make(map[string]string)
 	for host, addresses := range routes {
 		hostKey := normalizeHost(host)
 		if hostKey == "" {
@@ -52,12 +54,23 @@ func New(routes map[string][]string) (*Router, error) {
 			b := &backend{address: addr}
 			atomic.StoreUint32(&b.alive, 1)
 			bks = append(bks, b)
+			if _, exists := backendToHost[addr]; !exists {
+				backendToHost[addr] = hostKey
+			}
 		}
 
 		pools[hostKey] = &pool{backends: bks}
 	}
 
-	return &Router{pools: pools}, nil
+	return &Router{pools: pools, backendToHost: backendToHost}, nil
+}
+
+// HostForBackendAddr returns the host (route) key for the given backend address "ip:port".
+// Used when the client sends an IPv4 address: we look up which route contains this backend
+// and use that route's pool (same as for FQDN). If the address is not in any route, ok is false.
+func (r *Router) HostForBackendAddr(addr string) (host string, ok bool) {
+	host, ok = r.backendToHost[addr]
+	return host, ok
 }
 
 func (r *Router) Pick(host string) (string, error) {

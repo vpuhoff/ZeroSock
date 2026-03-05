@@ -94,7 +94,21 @@ func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Colle
 		m.IncConnectionError("request")
 		return err
 	}
-	routeHost := req.RouteKey()
+
+	var routeHost string
+	if req.atyp == atypIPv4 {
+		addr := fmt.Sprintf("%s:%d", req.host, req.port)
+		var ok bool
+		routeHost, ok = dialer.router.HostForBackendAddr(addr)
+		if !ok {
+			m.IncRouteFailure(addr, "ip_not_in_routes")
+			m.IncConnectionError("backend_dial")
+			_ = writeFailureReply(client, replyHostUnreachable)
+			return fmt.Errorf("ip %s not in any route (whitelist)", addr)
+		}
+	} else {
+		routeHost = req.RouteKey()
+	}
 	m.IncRequest(atypLabel(req.atyp))
 
 	dialStart := time.Now()

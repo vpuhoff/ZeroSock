@@ -84,9 +84,9 @@ routes:
 
 ## Behavior
 
-- If destination host from SOCKS5 request exists in `routes`, ZeroSock picks an `Alive` backend via round robin and dials backend IP directly.
-- For IPv4 SOCKS requests, routing key is the IPv4 string (for example `203.0.113.10`) and must exist in `routes` if used.
-- If host does not exist in config, request is denied.
+- **FQDN:** If the destination host from the SOCKS5 request exists in `routes`, ZeroSock picks an `Alive` backend via round robin and dials it.
+- **IPv4 (Local vs Remote DNS):** When the client sends an IP address (ATYP `0x01`), ZeroSock looks up which route has that `ip:port` in its backend list and uses that route’s pool (same logic as FQDN). This lets the app use local DNS or cached IPs while still getting health checks and load balancing. If the IP is not in any route’s backends, the request is denied (whitelist).
+- If host (or IP) does not match any route, request is denied.
 - If all backends for host are dead, request is denied until healthcheck marks at least one backend alive.
 - `server.max_connections` limits simultaneously handled client sessions.
 - `server.max_inflight_dials` limits concurrent backend dial attempts.
