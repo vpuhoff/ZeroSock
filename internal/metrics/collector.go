@@ -22,6 +22,7 @@ type Collector struct {
 	relayBytes        map[string]uint64
 	healthchecks      map[string]uint64
 	backendsAlive     map[string]bool
+	tcpState          map[string]uint64
 
 	handshakeCount uint64
 	handshakeSumNs uint64
@@ -41,7 +42,17 @@ func NewCollector() *Collector {
 		relayBytes:        make(map[string]uint64),
 		healthchecks:      make(map[string]uint64),
 		backendsAlive:     make(map[string]bool),
+		tcpState:          make(map[string]uint64),
 	}
+}
+
+func (c *Collector) IncTCPState(state string) {
+	if c == nil || state == "" {
+		return
+	}
+	c.mu.Lock()
+	c.tcpState[state]++
+	c.mu.Unlock()
 }
 
 func (c *Collector) IncConnectionAccepted() {
@@ -194,6 +205,7 @@ func (c *Collector) RenderPrometheusText() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	writeLabelCounters(&b, "zerosock_tcp_state_total", "state", c.tcpState)
 	writeLabelCounters(&b, "zerosock_connection_errors_total", "stage", c.connectionErrors)
 	writeLabelCounters(&b, "zerosock_requests_total", "atyp", c.requestsTotal)
 	writeKVLabelCounters(&b, "zerosock_requests_backend_total", c.requestsByBackend)

@@ -141,28 +141,50 @@ func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Colle
 		_ = backendConn.SetDeadline(time.Now().Add(idleTimeout))
 	}
 
-	if err := relay(client, backendConn, m); err != nil {
+	m.IncTCPState("established")
+	relayErr, closeType := relay(client, backendConn, m)
+	m.IncTCPState(closeType)
+
+	if relayErr != nil {
 		m.IncRequestByBackend(routeHost, backendAddr, "relay_error")
 		m.IncConnectionError("relay")
-		return err
+		return relayErr
 	}
 	m.IncRequestByBackend(routeHost, backendAddr, "success")
 	m.ObserveSessionDuration(time.Since(sessionStart))
 	return nil
 }
 
-func relay(client, backend *net.TCPConn, m *metrics.Collector) error {
+func relay(client, backend *net.TCPConn, m *metrics.Collector) (firstErr error, closeType string) {
 	errCh := make(chan error, 2)
 	go copyHalf(backend, client, "client_to_backend", m, errCh)
 	go copyHalf(client, backend, "backend_to_client", m, errCh)
 
-	var firstErr error
-	for i := 0; i < 2; i++ {
-		if err := <-errCh; err != nil && !isIgnorableCopyError(err) && firstErr == nil {
+	var err1, err2 error
+	err1, err2 = <-errCh, <-errCh
+	for _, err := range []error{err1, err2} {
+		if err != nil && !isIgnorableCopyError(err) && firstErr == nil {
 			firstErr = err
 		}
 	}
-	return firstErr
+	return firstErr, classifyCloseType(err1, err2)
+}
+
+func classifyCloseType(err1, err2 error) string {
+	if isRSTError(err1) || isRSTError(err2) {
+		return "rst"
+	}
+	return "fin"
+}
+
+func isRSTError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "forcibly closed by the remote host")
 }
 
 func copyHalf(dst, src *net.TCPConn, direction string, m *metrics.Collector, errCh chan<- error) {

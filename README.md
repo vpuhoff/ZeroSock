@@ -91,6 +91,7 @@ routes:
 Exported base metrics include:
 
 - `zerosock_connections_total`, `zerosock_connections_active`
+- `zerosock_tcp_state_total{state=...}` — TCP lifecycle: `syn` (accepted), `established` (relay started), `fin` (graceful close), `rst` (reset/error)
 - `zerosock_handshake_latency_seconds`
 - `zerosock_requests_total{atyp=...}`
 - `zerosock_requests_backend_total{host,backend,result}`

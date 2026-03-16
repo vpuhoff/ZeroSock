@@ -100,6 +100,7 @@ func (s *Server) Serve() error {
 		}
 
 		s.metrics.IncConnectionAccepted()
+		s.metrics.IncTCPState("syn")
 		s.wg.Add(1)
 		go s.serveClient(client)
 	}
