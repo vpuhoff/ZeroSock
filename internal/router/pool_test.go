@@ -1,6 +1,7 @@
 package router
 
 import (
+	"sort"
 	"testing"
 )
 
@@ -89,9 +90,9 @@ func TestHostForBackendAddr(t *testing.T) {
 	}
 
 	for _, tt := range []struct {
-		addr   string
+		addr     string
 		wantHost string
-		wantOK bool
+		wantOK   bool
 	}{
 		{"10.0.1.10:8080", "api.internal", true},
 		{"10.0.1.11:8080", "api.internal", true},
@@ -125,5 +126,42 @@ func TestHostForBackendAddrThenPick(t *testing.T) {
 	}
 	if addr != "10.0.0.1:80" && addr != "10.0.0.2:80" {
 		t.Errorf("Pick(svc) = %s; want 10.0.0.1:80 or 10.0.0.2:80", addr)
+	}
+}
+
+func TestSnapshot(t *testing.T) {
+	r, err := New(map[string][]string{
+		"api.internal": {"10.0.0.1:80", "10.0.0.2:80"},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	changed, err := r.SetBackendAlive("api.internal", "10.0.0.1:80", false)
+	if err != nil {
+		t.Fatalf("SetBackendAlive() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("SetBackendAlive() expected changed=true")
+	}
+
+	snapshot := r.Snapshot()
+	if len(snapshot) != 2 {
+		t.Fatalf("Snapshot() len = %d; want 2", len(snapshot))
+	}
+
+	sort.Slice(snapshot, func(i, j int) bool {
+		return snapshot[i].Address < snapshot[j].Address
+	})
+
+	want := []BackendState{
+		{Host: "api.internal", Address: "10.0.0.1:80", Alive: false},
+		{Host: "api.internal", Address: "10.0.0.2:80", Alive: true},
+	}
+
+	for i := range want {
+		if snapshot[i] != want[i] {
+			t.Fatalf("Snapshot()[%d] = %+v; want %+v", i, snapshot[i], want[i])
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -16,20 +17,40 @@ import (
 	"zerosock/internal/socks"
 )
 
+var (
+	newMainLogger = func() *log.Logger {
+		return log.New(os.Stdout, "", log.LstdFlags)
+	}
+	runMain = run
+	fatalf  = func(logger *log.Logger, format string, args ...any) {
+		logger.Fatalf(format, args...)
+	}
+)
+
 func main() {
-	logger := log.New(os.Stdout, "", log.LstdFlags)
+	logger := newMainLogger()
 
 	configPath := flag.String("config", "config.yaml", "path to YAML config")
 	flag.Parse()
 
-	cfg, err := config.Load(*configPath)
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	if err := runMain(*configPath, sigCh, logger); err != nil {
+		fatalf(logger, "%v", err)
+	}
+}
+
+func run(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		logger.Fatalf("config error: %v", err)
+		return fmt.Errorf("config error: %w", err)
 	}
 
 	rt, err := router.New(cfg.Routes)
 	if err != nil {
-		logger.Fatalf("router init error: %v", err)
+		return fmt.Errorf("router init error: %w", err)
 	}
 
 	metricCollector := metrics.NewCollector()
@@ -54,7 +75,7 @@ func main() {
 		metricCollector,
 	)
 	if err != nil {
-		logger.Fatalf("server init error: %v", err)
+		return fmt.Errorf("server init error: %w", err)
 	}
 
 	var metricsErrCh <-chan error
@@ -67,21 +88,21 @@ func main() {
 		serveErrCh <- server.Serve()
 	}()
 
-	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
 	select {
 	case err := <-serveErrCh:
 		if err != nil {
-			logger.Fatalf("serve failed: %v", err)
+			cancel()
+			_ = server.Shutdown()
+			return fmt.Errorf("serve failed: %w", err)
 		}
-		return
+		return nil
 	case err := <-metricsErrCh:
 		if err != nil {
-			logger.Fatalf("metrics serve failed: %v", err)
+			cancel()
+			_ = server.Shutdown()
+			return fmt.Errorf("metrics serve failed: %w", err)
 		}
-		return
+		return nil
 	case sig := <-sigCh:
 		logger.Printf("shutdown: received signal %s", sig)
 	}
@@ -107,4 +128,6 @@ func main() {
 	case sig := <-sigCh:
 		logger.Printf("shutdown: second signal %s, exiting immediately", sig)
 	}
+
+	return nil
 }
