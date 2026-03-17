@@ -44,6 +44,7 @@
 2. Define `backends` (named groups with addresses and optional per-group healthcheck) and `routes` (host → group name).
 3. Run:
    - `go run ./cmd/zerosock -config config.yaml`
+   - Validate config only: `go run ./cmd/zerosock -c config.yaml`
 
 4. Scrape metrics:
    - `curl http://127.0.0.1:9090/metrics`

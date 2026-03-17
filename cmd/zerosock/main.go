@@ -21,8 +21,9 @@ var (
 	newMainLogger = func() *log.Logger {
 		return log.New(os.Stdout, "", log.LstdFlags)
 	}
-	runMain = run
-	fatalf  = func(logger *log.Logger, format string, args ...any) {
+	runMain         = run
+	validateMainCfg = validateConfig
+	fatalf          = func(logger *log.Logger, format string, args ...any) {
 		logger.Fatalf(format, args...)
 	}
 )
@@ -31,7 +32,15 @@ func main() {
 	logger := newMainLogger()
 
 	configPath := flag.String("config", "config.yaml", "path to YAML config")
+	checkConfigPath := flag.String("c", "", "validate config and exit")
 	flag.Parse()
+
+	if *checkConfigPath != "" {
+		if err := validateMainCfg(*checkConfigPath, logger); err != nil {
+			fatalf(logger, "%v", err)
+		}
+		return
+	}
 
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -40,6 +49,18 @@ func main() {
 	if err := runMain(*configPath, sigCh, logger); err != nil {
 		fatalf(logger, "%v", err)
 	}
+}
+
+func validateConfig(configPath string, logger *log.Logger) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("config error: %w", err)
+	}
+	if _, err := router.New(cfg.Routes); err != nil {
+		return fmt.Errorf("router init error: %w", err)
+	}
+	logger.Printf("config OK: %s", configPath)
+	return nil
 }
 
 func run(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {

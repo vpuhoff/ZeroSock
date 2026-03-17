@@ -18,12 +18,14 @@ func TestMainPassesConfigPathToRun(t *testing.T) {
 	oldArgs := os.Args
 	oldFlagSet := flag.CommandLine
 	oldRunMain := runMain
+	oldValidateMainCfg := validateMainCfg
 	oldFatalf := fatalf
 	oldLoggerFactory := newMainLogger
 	defer func() {
 		os.Args = oldArgs
 		flag.CommandLine = oldFlagSet
 		runMain = oldRunMain
+		validateMainCfg = oldValidateMainCfg
 		fatalf = oldFatalf
 		newMainLogger = oldLoggerFactory
 	}()
@@ -33,6 +35,10 @@ func TestMainPassesConfigPathToRun(t *testing.T) {
 	flag.CommandLine.SetOutput(io.Discard)
 
 	newMainLogger = func() *log.Logger { return log.New(io.Discard, "", 0) }
+	validateMainCfg = func(configPath string, logger *log.Logger) error {
+		t.Fatalf("validateMainCfg should not be called in normal run mode")
+		return nil
+	}
 
 	called := false
 	runMain = func(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {
@@ -63,12 +69,14 @@ func TestMainCallsFatalfOnRunError(t *testing.T) {
 	oldArgs := os.Args
 	oldFlagSet := flag.CommandLine
 	oldRunMain := runMain
+	oldValidateMainCfg := validateMainCfg
 	oldFatalf := fatalf
 	oldLoggerFactory := newMainLogger
 	defer func() {
 		os.Args = oldArgs
 		flag.CommandLine = oldFlagSet
 		runMain = oldRunMain
+		validateMainCfg = oldValidateMainCfg
 		fatalf = oldFatalf
 		newMainLogger = oldLoggerFactory
 	}()
@@ -78,6 +86,10 @@ func TestMainCallsFatalfOnRunError(t *testing.T) {
 	flag.CommandLine.SetOutput(io.Discard)
 
 	newMainLogger = func() *log.Logger { return log.New(io.Discard, "", 0) }
+	validateMainCfg = func(configPath string, logger *log.Logger) error {
+		t.Fatalf("validateMainCfg should not be called in normal run mode")
+		return nil
+	}
 
 	wantErr := errors.New("boom")
 	runMain = func(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {
@@ -99,6 +111,120 @@ func TestMainCallsFatalfOnRunError(t *testing.T) {
 
 	if !fatalCalled {
 		t.Fatal("fatalf was not called")
+	}
+}
+
+func TestMainChecksConfigWithShortFlag(t *testing.T) {
+	oldArgs := os.Args
+	oldFlagSet := flag.CommandLine
+	oldRunMain := runMain
+	oldValidateMainCfg := validateMainCfg
+	oldFatalf := fatalf
+	oldLoggerFactory := newMainLogger
+	defer func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldFlagSet
+		runMain = oldRunMain
+		validateMainCfg = oldValidateMainCfg
+		fatalf = oldFatalf
+		newMainLogger = oldLoggerFactory
+	}()
+
+	os.Args = []string{"zerosock", "-c", "/tmp/check-config.yaml"}
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	flag.CommandLine.SetOutput(io.Discard)
+
+	newMainLogger = func() *log.Logger { return log.New(io.Discard, "", 0) }
+
+	validateCalled := false
+	validateMainCfg = func(configPath string, logger *log.Logger) error {
+		validateCalled = true
+		if configPath != "/tmp/check-config.yaml" {
+			t.Fatalf("configPath = %q; want %q", configPath, "/tmp/check-config.yaml")
+		}
+		return nil
+	}
+	runMain = func(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {
+		t.Fatalf("runMain should not be called in config check mode")
+		return nil
+	}
+	fatalf = func(logger *log.Logger, format string, args ...any) {
+		t.Fatalf("fatalf should not be called on successful config check")
+	}
+
+	main()
+
+	if !validateCalled {
+		t.Fatal("validateMainCfg was not called")
+	}
+}
+
+func TestMainCallsFatalfOnCheckConfigError(t *testing.T) {
+	oldArgs := os.Args
+	oldFlagSet := flag.CommandLine
+	oldRunMain := runMain
+	oldValidateMainCfg := validateMainCfg
+	oldFatalf := fatalf
+	oldLoggerFactory := newMainLogger
+	defer func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldFlagSet
+		runMain = oldRunMain
+		validateMainCfg = oldValidateMainCfg
+		fatalf = oldFatalf
+		newMainLogger = oldLoggerFactory
+	}()
+
+	os.Args = []string{"zerosock", "-c", "broken.yaml"}
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	flag.CommandLine.SetOutput(io.Discard)
+
+	newMainLogger = func() *log.Logger { return log.New(io.Discard, "", 0) }
+
+	wantErr := errors.New("bad config")
+	validateMainCfg = func(configPath string, logger *log.Logger) error {
+		return wantErr
+	}
+	runMain = func(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {
+		t.Fatalf("runMain should not be called in config check mode")
+		return nil
+	}
+
+	fatalCalled := false
+	fatalf = func(logger *log.Logger, format string, args ...any) {
+		fatalCalled = true
+		if len(args) != 1 || args[0] != wantErr {
+			t.Fatalf("fatalf args = %#v; want %#v", args, []any{wantErr})
+		}
+	}
+
+	main()
+
+	if !fatalCalled {
+		t.Fatal("fatalf was not called")
+	}
+}
+
+func TestValidateConfigSuccess(t *testing.T) {
+	var logs strings.Builder
+	logger := log.New(&logs, "", 0)
+
+	configPath := writeConfigFile(t, freeAddr(t), "", false)
+	if err := validateConfig(configPath, logger); err != nil {
+		t.Fatalf("validateConfig() error = %v", err)
+	}
+	if !strings.Contains(logs.String(), "config OK: "+configPath) {
+		t.Fatalf("unexpected logger output: %q", logs.String())
+	}
+}
+
+func TestValidateConfigError(t *testing.T) {
+	err := validateConfig("/nonexistent/config.yaml", log.New(io.Discard, "", 0))
+	if err == nil {
+		t.Fatal("validateConfig() error = nil; want config error")
+	}
+	if !strings.Contains(err.Error(), "config error:") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
