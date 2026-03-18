@@ -115,6 +115,10 @@ func (s *Server) Shutdown() error {
 	return s.listener.Close()
 }
 
+func (s *Server) UpdateRouter(r *router.Router) {
+	s.dialer.UpdateRouter(r)
+}
+
 func (s *Server) Wait(timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {

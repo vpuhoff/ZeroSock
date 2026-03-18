@@ -11,7 +11,6 @@ import (
 	"syscall"
 
 	"zerosock/internal/config"
-	"zerosock/internal/health"
 	"zerosock/internal/metrics"
 	"zerosock/internal/router"
 	"zerosock/internal/socks"
@@ -43,7 +42,7 @@ func main() {
 	}
 
 	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigCh)
 
 	if err := runMain(*configPath, sigCh, logger); err != nil {
@@ -64,23 +63,14 @@ func validateConfig(configPath string, logger *log.Logger) error {
 }
 
 func run(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("config error: %w", err)
-	}
-
-	rt, err := router.New(cfg.Routes)
-	if err != nil {
-		return fmt.Errorf("router init error: %w", err)
-	}
-
 	metricCollector := metrics.NewCollector()
+	cfg, rt, checker, err := buildReloadTarget(configPath, logger, metricCollector)
+	if err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	checker := health.New(rt, cfg.BackendGroups, cfg.HostToGroup, logger, metricCollector)
-	go checker.Start(ctx)
 
 	server, err := socks.New(
 		cfg.ListenAddr,
@@ -104,39 +94,55 @@ func run(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {
 		metricsErrCh = metrics.StartHTTP(ctx, cfg.MetricsListenAddr, metricCollector, logger)
 	}
 
+	state := newRuntimeState(ctx, logger, server, metricCollector, cfg, startChecker(ctx, checker))
+
 	serveErrCh := make(chan error, 1)
 	go func() {
 		serveErrCh <- server.Serve()
 	}()
 
-	select {
-	case err := <-serveErrCh:
-		if err != nil {
-			cancel()
-			_ = server.Shutdown()
-			return fmt.Errorf("serve failed: %w", err)
+loop:
+	for {
+		select {
+		case err := <-serveErrCh:
+			if err != nil {
+				cancel()
+				state.stopChecker()
+				_ = server.Shutdown()
+				return fmt.Errorf("serve failed: %w", err)
+			}
+			return nil
+		case err := <-metricsErrCh:
+			if err != nil {
+				cancel()
+				state.stopChecker()
+				_ = server.Shutdown()
+				return fmt.Errorf("metrics serve failed: %w", err)
+			}
+			return nil
+		case sig := <-sigCh:
+			if sig == syscall.SIGHUP {
+				if err := state.reload(configPath); err != nil {
+					logger.Printf("reload: failed: %v", err)
+				}
+				continue
+			}
+			logger.Printf("shutdown: received signal %s", sig)
+			break loop
 		}
-		return nil
-	case err := <-metricsErrCh:
-		if err != nil {
-			cancel()
-			_ = server.Shutdown()
-			return fmt.Errorf("metrics serve failed: %w", err)
-		}
-		return nil
-	case sig := <-sigCh:
-		logger.Printf("shutdown: received signal %s", sig)
 	}
 
 	cancel()
+	state.stopChecker()
 	if err := server.Shutdown(); err != nil && !errors.Is(err, os.ErrClosed) {
 		logger.Printf("shutdown: close listener error: %v", err)
 	}
 
-	logger.Printf("shutdown: allowing active tunnels to finish for %s", cfg.ShutdownGrace)
+	currentCfg := state.currentConfig()
+	logger.Printf("shutdown: allowing active tunnels to finish for %s", currentCfg.ShutdownGrace)
 	waitDone := make(chan bool, 1)
 	go func() {
-		waitDone <- server.Wait(cfg.ShutdownGrace)
+		waitDone <- server.Wait(currentCfg.ShutdownGrace)
 	}()
 
 	select {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"zerosock/internal/metrics"
@@ -13,6 +14,7 @@ import (
 )
 
 type routeDialer struct {
+	routerMu    sync.RWMutex
 	router      *router.Router
 	dialTimeout time.Duration
 	keepAlive   time.Duration
@@ -32,6 +34,18 @@ func newRouteDialer(r *router.Router, dialTimeout, keepAlive time.Duration, maxI
 	}
 }
 
+func (d *routeDialer) currentRouter() *router.Router {
+	d.routerMu.RLock()
+	defer d.routerMu.RUnlock()
+	return d.router
+}
+
+func (d *routeDialer) UpdateRouter(r *router.Router) {
+	d.routerMu.Lock()
+	defer d.routerMu.Unlock()
+	d.router = r
+}
+
 func (d *routeDialer) DialRoute(routeHost string) (*net.TCPConn, string, error) {
 	if d.inflightSem != nil {
 		select {
@@ -42,7 +56,8 @@ func (d *routeDialer) DialRoute(routeHost string) (*net.TCPConn, string, error) 
 		defer func() { <-d.inflightSem }()
 	}
 
-	target, err := d.router.Pick(normalizeHost(routeHost))
+	rt := d.currentRouter()
+	target, err := rt.Pick(normalizeHost(routeHost))
 	if err != nil {
 		if errors.Is(err, router.ErrRouteNotFound) {
 			return nil, "", fmt.Errorf("route for host %q not found", routeHost)
@@ -98,8 +113,9 @@ func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Colle
 	var routeHost string
 	if req.atyp == atypIPv4 {
 		addr := fmt.Sprintf("%s:%d", req.host, req.port)
+		rt := dialer.currentRouter()
 		var ok bool
-		routeHost, ok = dialer.router.HostForBackendAddr(addr)
+		routeHost, ok = rt.HostForBackendAddr(addr)
 		if !ok {
 			m.IncRouteFailure(addr, "ip_not_in_routes")
 			m.IncConnectionError("backend_dial")

@@ -49,6 +49,27 @@
 4. Scrape metrics:
    - `curl http://127.0.0.1:9090/metrics`
 
+## Hot Reload
+
+Reload the config without restarting the process:
+
+- `kill -HUP <zerosock-pid>`
+
+What is applied on `SIGHUP`:
+
+- `routes`
+- `backends`
+- `healthcheck` settings
+
+What is not applied until full restart:
+
+- `server.listen_addr`
+- `metrics.listen_addr`
+- `metrics.enabled`
+- connection and timeout tuning such as `max_connections`, `max_inflight_dials`, `dial_ms`, `read_ms`, `write_ms`, `idle_ms`, `keepalive_ms`
+
+If a new config is invalid, ZeroSock logs the reload error and keeps the previous working configuration.
+
 ## Config
 
 Example structure (full template in `config.example.yaml`):
