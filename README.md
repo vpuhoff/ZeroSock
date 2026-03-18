@@ -49,6 +49,19 @@
 4. Scrape metrics:
    - `curl http://127.0.0.1:9090/metrics`
 
+## Auto-Discovery
+
+When `auto_discovery.enabled: true`, unknown hosts (FQDN or IP) are resolved, added to config, and saved to disk. The first request to an unknown host triggers DNS lookup (for FQDN) or direct add (for IP), appends a new backend group and route, and reloads the config. Subsequent requests use the new route.
+
+```yaml
+auto_discovery:
+  enabled: true
+```
+
+- **FQDN:** Resolves host to IPv4 addresses and creates `auto-<host>` backend group.
+- **IPv4:** Adds the `ip:port` as a single-address backend.
+- New routes are written to the config file and applied via hot-reload.
+
 ## Hot Reload
 
 Reload the config without restarting the process:
@@ -172,4 +185,5 @@ In short: ZeroSock is a scalpel; Envoy or Xray are Swiss Army knives with many b
 - [x] Prometheus metrics
 - [x] Active upstream health checks
 - [x] Zero-copy relay (`splice`)
-- [ ] **Hot-reload** — update upstream pools and whitelists without restart (planned)
+- [x] Hot-reload on SIGHUP
+- [x] Auto-discovery for unknown hosts

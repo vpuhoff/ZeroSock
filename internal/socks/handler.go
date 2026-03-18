@@ -13,6 +13,12 @@ import (
 	"zerosock/internal/router"
 )
 
+// HostDiscoverer discovers unknown hosts and adds them to config.
+// Used for auto-discovery mode when route is not found.
+type HostDiscoverer interface {
+	Discover(host string, port uint16) (added bool, err error)
+}
+
 type routeDialer struct {
 	routerMu    sync.RWMutex
 	router      *router.Router
@@ -60,10 +66,10 @@ func (d *routeDialer) DialRoute(routeHost string) (*net.TCPConn, string, error) 
 	target, err := rt.Pick(normalizeHost(routeHost))
 	if err != nil {
 		if errors.Is(err, router.ErrRouteNotFound) {
-			return nil, "", fmt.Errorf("route for host %q not found", routeHost)
+			return nil, "", fmt.Errorf("route for host %q not found: %w", routeHost, err)
 		}
 		if errors.Is(err, router.ErrNoAliveBackends) {
-			return nil, "", fmt.Errorf("no alive backends for host %q", routeHost)
+			return nil, "", fmt.Errorf("no alive backends for host %q: %w", routeHost, err)
 		}
 		return nil, "", fmt.Errorf("pick backend for host %q: %w", routeHost, err)
 	}
@@ -87,7 +93,7 @@ func (d *routeDialer) DialRoute(routeHost string) (*net.TCPConn, string, error) 
 	return tcpConn, target, nil
 }
 
-func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Collector, readTimeout, writeTimeout, idleTimeout time.Duration) error {
+func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Collector, readTimeout, writeTimeout, idleTimeout time.Duration, discoverer HostDiscoverer) error {
 	sessionStart := time.Now()
 	handshakeStart := time.Now()
 
@@ -110,36 +116,51 @@ func handleConnection(client *net.TCPConn, dialer *routeDialer, m *metrics.Colle
 		return err
 	}
 
-	var routeHost string
-	if req.atyp == atypIPv4 {
-		addr := fmt.Sprintf("%s:%d", req.host, req.port)
-		rt := dialer.currentRouter()
-		var ok bool
-		routeHost, ok = rt.HostForBackendAddr(addr)
-		if !ok {
-			m.IncRouteFailure(addr, "ip_not_in_routes")
+	var routeHost, backendAddr string
+	var backendConn *net.TCPConn
+	for attempt := 0; ; attempt++ {
+		if req.atyp == atypIPv4 {
+			addr := fmt.Sprintf("%s:%d", req.host, req.port)
+			rt := dialer.currentRouter()
+			var ok bool
+			routeHost, ok = rt.HostForBackendAddr(addr)
+			if !ok {
+				if discoverer != nil && attempt == 0 {
+					if added, _ := discoverer.Discover(req.host, req.port); added {
+						continue
+					}
+				}
+				m.IncRouteFailure(addr, "ip_not_in_routes")
+				m.IncConnectionError("backend_dial")
+				_ = writeFailureReply(client, replyHostUnreachable)
+				return fmt.Errorf("ip %s not in any route (whitelist)", addr)
+			}
+		} else {
+			routeHost = req.RouteKey()
+		}
+		m.IncRequest(atypLabel(req.atyp))
+
+		dialStart := time.Now()
+		var err error
+		backendConn, backendAddr, err = dialer.DialRoute(routeHost)
+		m.ObserveBackendDialLatency(time.Since(dialStart))
+		if err != nil {
+			if errors.Is(err, router.ErrRouteNotFound) && discoverer != nil && attempt == 0 {
+				if added, _ := discoverer.Discover(routeHost, req.port); added {
+					continue
+				}
+			}
+			reason := classifyDialError(err)
+			m.IncBackendDialFailure(routeHost, reason)
+			m.IncRouteFailure(routeHost, reason)
+			m.IncRequestByBackend(routeHost, backendAddr, reason)
 			m.IncConnectionError("backend_dial")
 			_ = writeFailureReply(client, replyHostUnreachable)
-			return fmt.Errorf("ip %s not in any route (whitelist)", addr)
+			return err
 		}
-	} else {
-		routeHost = req.RouteKey()
+		defer backendConn.Close()
+		break
 	}
-	m.IncRequest(atypLabel(req.atyp))
-
-	dialStart := time.Now()
-	backendConn, backendAddr, err := dialer.DialRoute(routeHost)
-	m.ObserveBackendDialLatency(time.Since(dialStart))
-	if err != nil {
-		reason := classifyDialError(err)
-		m.IncBackendDialFailure(routeHost, reason)
-		m.IncRouteFailure(routeHost, reason)
-		m.IncRequestByBackend(routeHost, backendAddr, reason)
-		m.IncConnectionError("backend_dial")
-		_ = writeFailureReply(client, replyHostUnreachable)
-		return err
-	}
-	defer backendConn.Close()
 
 	if writeTimeout > 0 {
 		_ = client.SetWriteDeadline(time.Now().Add(writeTimeout))

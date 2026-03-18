@@ -20,6 +20,7 @@ type Server struct {
 	writeTimeout time.Duration
 	idleTimeout  time.Duration
 	dialer       *routeDialer
+	discoverer   HostDiscoverer
 	logger       *log.Logger
 	metrics      *metrics.Collector
 	connLimitSem chan struct{}
@@ -37,6 +38,7 @@ func New(
 	readTimeout, writeTimeout, idleTimeout time.Duration,
 	logger *log.Logger,
 	m *metrics.Collector,
+	discoverer HostDiscoverer,
 ) (*Server, error) {
 	var connLimitSem chan struct{}
 	if maxConnections > 0 {
@@ -50,6 +52,7 @@ func New(
 		writeTimeout: writeTimeout,
 		idleTimeout:  idleTimeout,
 		dialer:       newRouteDialer(r, dialTimeout, keepAlive, maxInflightDials),
+		discoverer:   discoverer,
 		logger:       logger,
 		metrics:      m,
 		connLimitSem: connLimitSem,
@@ -145,7 +148,7 @@ func (s *Server) serveClient(client *net.TCPConn) {
 		defer func() { <-s.connLimitSem }()
 	}
 
-	if err := handleConnection(client, s.dialer, s.metrics, s.readTimeout, s.writeTimeout, s.idleTimeout); err != nil {
+	if err := handleConnection(client, s.dialer, s.metrics, s.readTimeout, s.writeTimeout, s.idleTimeout, s.discoverer); err != nil {
 		s.logger.Printf("socks5: connection error from=%s err=%v", client.RemoteAddr(), err)
 	}
 }

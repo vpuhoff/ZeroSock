@@ -31,6 +31,7 @@ func TestNewInitializesConnLimitSem(t *testing.T) {
 		time.Second,
 		log.New(io.Discard, "", 0),
 		metrics.NewCollector(),
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -109,6 +110,7 @@ func TestServerServeAndShutdown(t *testing.T) {
 		2*time.Second,
 		log.New(io.Discard, "", 0),
 		m,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -270,6 +272,7 @@ func TestServerUpdateRouterAffectsNewConnections(t *testing.T) {
 		2*time.Second,
 		log.New(io.Discard, "", 0),
 		m,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

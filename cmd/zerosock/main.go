@@ -72,6 +72,16 @@ func run(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	reloadRequestCh := make(chan chan error, 4)
+	var discoverer socks.HostDiscoverer
+	if cfg.AutoDiscoveryEnabled {
+		discoverer = newDiscoverer(configPath, func() error {
+			ch := make(chan error, 1)
+			reloadRequestCh <- ch
+			return <-ch
+		}, logger)
+	}
+
 	server, err := socks.New(
 		cfg.ListenAddr,
 		rt,
@@ -84,6 +94,7 @@ func run(configPath string, sigCh <-chan os.Signal, logger *log.Logger) error {
 		cfg.IdleTimeout,
 		logger,
 		metricCollector,
+		discoverer,
 	)
 	if err != nil {
 		return fmt.Errorf("server init error: %w", err)
@@ -129,6 +140,14 @@ loop:
 			}
 			logger.Printf("shutdown: received signal %s", sig)
 			break loop
+		case ch := <-reloadRequestCh:
+			var err error
+			if rerr := state.reload(configPath); rerr != nil {
+				err = rerr
+				logger.Printf("reload: auto-discovery failed: %v", rerr)
+			}
+			ch <- err
+			close(ch)
 		}
 	}
 

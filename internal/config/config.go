@@ -52,6 +52,10 @@ type Config struct {
 		IdleMS              int `yaml:"idle_ms"`
 	} `yaml:"timeouts"`
 
+	AutoDiscovery struct {
+		Enabled *bool `yaml:"enabled"`
+	} `yaml:"auto_discovery"`
+
 	Backends map[string]BackendGroup `yaml:"backends"`
 	Routes   map[string]string        `yaml:"routes"` // host -> group name
 }
@@ -75,9 +79,10 @@ type BackendGroupConfig struct {
 }
 
 type RuntimeConfig struct {
-	ListenAddr      string
-	MetricsEnabled  bool
-	MetricsListenAddr string
+	ListenAddr         string
+	MetricsEnabled     bool
+	MetricsListenAddr  string
+	AutoDiscoveryEnabled bool
 	MaxConnections  int
 	MaxInflightDials int
 	DialTimeout     time.Duration
@@ -103,6 +108,71 @@ func Load(path string) (*RuntimeConfig, error) {
 	}
 
 	return normalizeAndValidate(&cfg)
+}
+
+// LoadRaw reads and parses config file into raw Config struct (no validation).
+func LoadRaw(path string) (*Config, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parse yaml: %w", err)
+	}
+	return &cfg, nil
+}
+
+// Save writes Config to file.
+func Save(path string, cfg *Config) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}
+
+// AddAutoDiscoveredRoute adds a new backend group and route for the given host and addresses.
+// Group name is derived from host (e.g. "api.example.com" -> "auto-api-example-com").
+// Returns true if added, false if route already exists.
+func AddAutoDiscoveredRoute(cfg *Config, host string, addresses []string) (added bool, err error) {
+	if cfg.Backends == nil {
+		cfg.Backends = make(map[string]BackendGroup)
+	}
+	if cfg.Routes == nil {
+		cfg.Routes = make(map[string]string)
+	}
+
+	hostKey := normalizeHost(host)
+	if hostKey == "" {
+		return false, errors.New("empty host")
+	}
+	if len(addresses) == 0 {
+		return false, errors.New("no addresses")
+	}
+
+	if _, exists := cfg.Routes[hostKey]; exists {
+		return false, nil
+	}
+
+	groupName := "auto-" + strings.ReplaceAll(strings.ReplaceAll(hostKey, ".", "-"), ":", "-")
+	if _, exists := cfg.Backends[groupName]; exists {
+		groupName = groupName + "-" + fmt.Sprintf("%d", len(cfg.Backends))
+	}
+
+	cfg.Backends[groupName] = BackendGroup{
+		Addresses:   addresses,
+		Healthcheck: struct {
+			IntervalMS int    `yaml:"interval_ms"`
+			TimeoutMS  int    `yaml:"timeout_ms"`
+			Path       string `yaml:"path"`
+		}{},
+	}
+	cfg.Routes[hostKey] = groupName
+	return true, nil
 }
 
 func normalizeAndValidate(cfg *Config) (*RuntimeConfig, error) {
@@ -142,6 +212,11 @@ func normalizeAndValidate(cfg *Config) (*RuntimeConfig, error) {
 	}
 	if len(cfg.Routes) == 0 {
 		return nil, errors.New("routes must contain at least one host")
+	}
+
+	autoDiscoveryEnabled := false
+	if cfg.AutoDiscovery.Enabled != nil && *cfg.AutoDiscovery.Enabled {
+		autoDiscoveryEnabled = true
 	}
 
 	routes := make(map[string][]string, len(cfg.Routes))
@@ -227,9 +302,10 @@ func normalizeAndValidate(cfg *Config) (*RuntimeConfig, error) {
 	shutdownGrace := durationFromMS(cfg.Timeouts.ShutdownGracePeriod, defaultShutdownGrace)
 
 	return &RuntimeConfig{
-		ListenAddr:        cfg.Server.ListenAddr,
-		MetricsEnabled:    metricsEnabled,
-		MetricsListenAddr: metricsListenAddr,
+		ListenAddr:          cfg.Server.ListenAddr,
+		MetricsEnabled:      metricsEnabled,
+		MetricsListenAddr:   metricsListenAddr,
+		AutoDiscoveryEnabled: autoDiscoveryEnabled,
 		MaxConnections:    cfg.Server.MaxConnections,
 		MaxInflightDials:  cfg.Server.MaxInflightDials,
 		DialTimeout:       dialTimeout,

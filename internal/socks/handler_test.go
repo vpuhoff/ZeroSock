@@ -772,7 +772,7 @@ func startHandleConnectionServer(t *testing.T, dialer *routeDialer, m *metrics.C
 			errCh <- err
 			return
 		}
-		errCh <- handleConnection(conn.(*net.TCPConn), dialer, m, time.Second, time.Second, 2*time.Second)
+		errCh <- handleConnection(conn.(*net.TCPConn), dialer, m, time.Second, time.Second, 2*time.Second, nil)
 	}()
 
 	return ln.Addr().String(), errCh

@@ -16,6 +16,10 @@ healthcheck:
 tcp:
   keepalive_ms: 30000
 
+# Optional: when enabled, unknown hosts are resolved and added to config automatically
+# auto_discovery:
+#   enabled: true
+
 timeouts:
   dial_ms: 4000
   read_ms: 10000

@@ -135,3 +135,45 @@ routes:
 		t.Fatalf("Load() expected error for non-IP backend")
 	}
 }
+
+func TestAddAutoDiscoveredRoute(t *testing.T) {
+	cfg := &Config{
+		Backends: map[string]BackendGroup{
+			"api-pool": {Addresses: []string{"10.0.1.10:8080"}},
+		},
+		Routes: map[string]string{"api.internal": "api-pool"},
+	}
+
+	added, err := AddAutoDiscoveredRoute(cfg, "new.example.com", []string{"192.168.1.1:443", "192.168.1.2:443"})
+	if err != nil {
+		t.Fatalf("AddAutoDiscoveredRoute() error = %v", err)
+	}
+	if !added {
+		t.Fatal("AddAutoDiscoveredRoute() added = false; want true")
+	}
+	if got := cfg.Routes["new.example.com"]; got != "auto-new-example-com" {
+		t.Fatalf("route group = %q; want auto-new-example-com", got)
+	}
+	if addrs := cfg.Backends["auto-new-example-com"].Addresses; len(addrs) != 2 {
+		t.Fatalf("backend addresses count = %d; want 2", len(addrs))
+	}
+
+	added, err = AddAutoDiscoveredRoute(cfg, "new.example.com", []string{"192.168.1.3:443"})
+	if err != nil {
+		t.Fatalf("AddAutoDiscoveredRoute() second call error = %v", err)
+	}
+	if added {
+		t.Fatal("AddAutoDiscoveredRoute() added = true; want false (already exists)")
+	}
+
+	added, err = AddAutoDiscoveredRoute(cfg, "1.2.3.4:443", []string{"1.2.3.4:443"})
+	if err != nil {
+		t.Fatalf("AddAutoDiscoveredRoute() IP error = %v", err)
+	}
+	if !added {
+		t.Fatal("AddAutoDiscoveredRoute() IP added = false; want true")
+	}
+	if got := cfg.Routes["1.2.3.4:443"]; got != "auto-1-2-3-4-443" {
+		t.Fatalf("IP route group = %q; want auto-1-2-3-4-443", got)
+	}
+}
